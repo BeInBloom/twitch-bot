@@ -1,7 +1,5 @@
 use async_trait::async_trait;
 
-use crate::domain::models::Event;
-
 #[async_trait]
 pub trait Router: Send + Sync {
     type Event;

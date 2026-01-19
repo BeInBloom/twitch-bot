@@ -7,7 +7,7 @@ use infra::{Config, UnixSignalHandler};
 
 use crate::infra::{
     consumer::{Consumer, router::base_router::base_router::BaseRouter},
-    fetchers::TwitchFetcher,
+    fetchers::EventSubFetcher,
 };
 
 #[tokio::main]
@@ -19,8 +19,8 @@ async fn main() -> anyhow::Result<()> {
     let router = BaseRouter::new();
     let consumer = Consumer::new(router);
 
-    let twitch_fetcher = TwitchFetcher::new(&config).await?;
-    let app = App::new(UnixSignalHandler::new(), twitch_fetcher, consumer)?;
+    let irc_fetcher = EventSubFetcher::new(&config).await?;
+    let app = App::new(UnixSignalHandler::new(), irc_fetcher, consumer)?;
 
     app.run().await
 }

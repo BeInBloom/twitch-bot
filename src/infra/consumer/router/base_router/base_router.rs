@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use async_trait::async_trait;
 
 use crate::{domain::models::Event, infra::consumer::router::Router};
 
@@ -10,17 +10,11 @@ impl BaseRouter {
     }
 }
 
+#[async_trait]
 impl Router for BaseRouter {
     type Event = Event;
 
-    fn route<'life0, 'async_trait>(
-        &'life0 self,
-        event: Self::Event,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        todo!("not now!")
+    async fn route(&self, _event: Self::Event) {
+        todo!("kek")
     }
 }
