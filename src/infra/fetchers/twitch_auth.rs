@@ -45,7 +45,6 @@ impl TokenManager {
         }
     }
 
-    #[allow(dead_code)]
     pub fn with_rotation_callback(mut self, callback: OnTokenRotation) -> Self {
         self.on_rotation = Some(callback);
         self

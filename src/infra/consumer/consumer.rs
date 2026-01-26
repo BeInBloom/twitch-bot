@@ -3,21 +3,21 @@ use tokio::sync::mpsc;
 
 use crate::{
     domain::{consumer::EventConsumer, models::Event},
-    infra::consumer::router::Router,
+    infra::consumer::router::traits::Handler,
 };
 
-pub struct Consumer<R: Router> {
+pub struct Consumer<R: Handler> {
     router: R,
 }
 
-impl<R: Router> Consumer<R> {
+impl<R: Handler> Consumer<R> {
     pub fn new(router: R) -> Self {
         Self { router }
     }
 }
 
 #[async_trait]
-impl<R: Router> EventConsumer for Consumer<R> {
+impl<R: Handler> EventConsumer for Consumer<R> {
     type Event = Event;
 
     async fn consume(&self, mut ch: mpsc::Receiver<Self::Event>) {

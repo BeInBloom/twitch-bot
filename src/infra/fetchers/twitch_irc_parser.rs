@@ -1,4 +1,4 @@
-use crate::domain::models::{Event, Platform, Role, User};
+use crate::domain::models::{Event, EventContext, EventKind, Platform, Role, User};
 
 pub trait MessageParser: Send + Sync + Clone {
     fn parse(&self, raw: &str) -> Vec<Event>;
@@ -70,14 +70,19 @@ fn parse_privmsg(tags: &str, params: &str) -> Option<Event> {
 
     let meta = parse_tags(tags);
 
-    Some(Event::ChatMessage {
-        user: User {
-            id: meta.user_id.to_string(),
-            display_name: meta.display_name.to_string(),
-            platform: Platform::Twitch,
-            role: meta.role,
+    Some(Event {
+        ctx: EventContext {
+            user: User {
+                id: meta.user_id.to_string(),
+                display_name: meta.display_name.to_string(),
+                platform: Platform::Twitch,
+                role: meta.role,
+            },
+            channel: None,
         },
-        text: text.to_string(),
+        kind: EventKind::ChatMessage {
+            text: text.to_string(),
+        },
     })
 }
 
@@ -165,18 +170,19 @@ mod tests {
         expected_role: Role,
         expected_text: &str,
     ) {
-        match event {
-            Event::ChatMessage { user, text } => {
-                assert_eq!(user.id, expected_id);
-                assert_eq!(user.display_name, expected_name);
-                assert_eq!(
-                    user.role, expected_role,
-                    "Expected role {:?}, got {:?}",
-                    expected_role, user.role
-                );
+        let user = event.user();
+        assert_eq!(user.id, expected_id);
+        assert_eq!(user.display_name, expected_name);
+        assert_eq!(
+            user.role, expected_role,
+            "Expected role {:?}, got {:?}",
+            expected_role, user.role
+        );
+        match &event.kind {
+            EventKind::ChatMessage { text } => {
                 assert_eq!(text, expected_text);
             }
-            _ => panic!("Expected ChatMessage, got {:?}", event),
+            _ => panic!("Expected ChatMessage, got {:?}", event.kind),
         }
     }
 

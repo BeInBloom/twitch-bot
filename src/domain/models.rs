@@ -72,21 +72,35 @@ pub struct User {
     pub role: Role,
 }
 
+impl User {
+    pub fn system() -> Self {
+        Self {
+            id: "0".into(),
+            display_name: "System".into(),
+            platform: Platform::Console,
+            role: Role::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub enum Event {
+pub struct EventContext {
+    pub user: User,
+    pub channel: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EventKind {
     ChatMessage {
-        user: User,
         text: String,
     },
 
     Command {
-        user: User,
         name: String,
         args: Vec<String>,
     },
 
     RewardRedemption {
-        user: User,
         reward_id: String,
         reward_title: String,
         cost: u32,
@@ -94,11 +108,28 @@ pub enum Event {
     },
 
     Donation {
-        user: User,
         amount: f64,
         currency: Currency,
         message: Option<String>,
     },
 
-    SystemMessage(String),
+    System {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub ctx: EventContext,
+    pub kind: EventKind,
+}
+
+impl Event {
+    pub fn user(&self) -> &User {
+        &self.ctx.user
+    }
+
+    pub fn has_role(&self, required: u8) -> bool {
+        self.ctx.user.role.contains(required)
+    }
 }

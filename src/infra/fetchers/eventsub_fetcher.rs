@@ -16,7 +16,7 @@ use url::Url;
 use crate::{
     domain::{
         fetcher::EventFetcher,
-        models::{Event, Platform, Role, User},
+        models::{Event, EventContext, EventKind, Platform, Role, User},
     },
     infra::Config,
 };
@@ -468,17 +468,22 @@ async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Even
             let payload: NotificationPayload = serde_json::from_value(msg.payload.clone())?;
             let redemption: RewardRedemptionEvent = serde_json::from_value(payload.event)?;
 
-            let event = Event::RewardRedemption {
-                user: User {
-                    id: redemption.user_id,
-                    display_name: redemption.user_name,
-                    platform: Platform::Twitch,
-                    role: Role::new(),
+            let event = Event {
+                ctx: EventContext {
+                    user: User {
+                        id: redemption.user_id,
+                        display_name: redemption.user_name,
+                        platform: Platform::Twitch,
+                        role: Role::new(),
+                    },
+                    channel: None,
                 },
-                reward_id: redemption.reward.id,
-                reward_title: redemption.reward.title,
-                cost: redemption.reward.cost,
-                user_input: redemption.user_input,
+                kind: EventKind::RewardRedemption {
+                    reward_id: redemption.reward.id,
+                    reward_title: redemption.reward.title,
+                    cost: redemption.reward.cost,
+                    user_input: redemption.user_input,
+                },
             };
 
             if event_tx.send(event).await.is_err() {
@@ -491,14 +496,19 @@ async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Even
 
             let role = determine_role_from_badges(&chat_msg.badges);
 
-            let event = Event::ChatMessage {
-                user: User {
-                    id: chat_msg.chatter_user_id,
-                    display_name: chat_msg.chatter_user_name,
-                    platform: Platform::Twitch,
-                    role,
+            let event = Event {
+                ctx: EventContext {
+                    user: User {
+                        id: chat_msg.chatter_user_id,
+                        display_name: chat_msg.chatter_user_name,
+                        platform: Platform::Twitch,
+                        role,
+                    },
+                    channel: None,
                 },
-                text: chat_msg.message.text,
+                kind: EventKind::ChatMessage {
+                    text: chat_msg.message.text,
+                },
             };
 
             if event_tx.send(event).await.is_err() {
