@@ -5,7 +5,6 @@ pub mod logging;
 pub mod signal;
 
 pub use config::Config;
-pub use consumer::message_handler;
 pub use fetchers::TwitchFetcher;
 pub use logging::LogGuard;
 pub use signal::UnixSignalHandler;

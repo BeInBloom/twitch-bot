@@ -12,6 +12,12 @@ impl MessageHandler {
     }
 }
 
+impl Default for MessageHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Handler for MessageHandler {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
