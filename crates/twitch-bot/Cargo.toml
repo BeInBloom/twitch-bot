@@ -1,0 +1,16 @@
+[package]
+name = "twitch-bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+twitch-sdk = { path = "../twitch-sdk" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+dotenv = { workspace = true }

@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
@@ -9,15 +9,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-use crate::{
-    domain::{fetcher::EventFetcher, models::Event},
-    infra::{
-        Config,
-        fetchers::{MessageParser, TwitchIrcParser},
-    },
-};
-
-use super::twitch_auth::TokenManager;
+use super::parser::parse_irc_messages;
+use crate::auth::TokenManager;
+use crate::types::TwitchEvent;
 
 const TWITCH_WS_URL: &str = "wss://irc-ws.chat.twitch.tv:443";
 const CHANNEL_BUFFER_SIZE: usize = 100;
@@ -28,139 +22,79 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
 type WsReader = futures_util::stream::SplitStream<WsStream>;
 
-#[allow(dead_code)]
-pub struct IrcFetcher<P: MessageParser = TwitchIrcParser> {
+pub struct IrcClient {
     token_manager: Arc<TokenManager>,
-    parser: P,
-    channel: Arc<str>,
-    nick: Arc<str>,
+    nick: String,
+    channel: String,
     cancel_token: CancellationToken,
+    custom_url: Option<String>,
 }
 
-impl IrcFetcher<TwitchIrcParser> {
-    #[allow(dead_code)]
-    pub async fn new(config: &Config) -> Result<Self> {
-        Self::with_cancel_token(config, CancellationToken::new()).await
-    }
-
-    #[allow(dead_code)]
-    pub async fn with_cancel_token(
-        config: &Config,
-        cancel_token: CancellationToken,
-    ) -> Result<Self> {
-        let nick: Arc<str> = config.require("TWITCH_BOT_NICK")?.into();
-
-        let channel: Arc<str> = parse_channels(config)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("config error: no channels defined"))?
-            .into();
-
-        let client_id = config.require("TWITCH_CLIENT_ID")?.to_string();
-        let client_secret = config.require("TWITCH_CLIENT_SECRET")?.to_string();
-        let refresh_token = config.require("TWITCH_REFRESH_TOKEN")?.to_string();
-
-        let token_manager = Arc::new(TokenManager::new(client_id, client_secret, refresh_token));
-        let _bg_handle = token_manager.clone().start_background_loop();
-
-        let parser = TwitchIrcParser::new();
-
-        Ok(Self {
+impl IrcClient {
+    #[must_use]
+    pub fn new(token_manager: Arc<TokenManager>, nick: String, channel: String) -> Self {
+        Self {
             token_manager,
-            parser,
-            channel,
             nick,
-            cancel_token,
-        })
-    }
-}
-
-impl<P: MessageParser> IrcFetcher<P> {
-    #[allow(dead_code)]
-    pub fn with_parser(base: IrcFetcher<TwitchIrcParser>, parser: P) -> IrcFetcher<P> {
-        IrcFetcher {
-            token_manager: base.token_manager,
-            parser,
-            channel: base.channel,
-            nick: base.nick,
-            cancel_token: base.cancel_token,
+            channel,
+            cancel_token: CancellationToken::new(),
+            custom_url: None,
         }
     }
 
-    #[allow(dead_code)]
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.cancel_token = token;
+        self
+    }
+
+    /// Set a custom WebSocket URL (for testing with mock servers)
+    #[must_use]
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.custom_url = Some(url.into());
+        self
+    }
+
+    #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel_token.clone()
     }
 
-    async fn run_lifecycle(
-        event_tx: mpsc::Sender<Event>,
-        token_manager: Arc<TokenManager>,
-        parser: P,
-        nick: Arc<str>,
-        channel: Arc<str>,
-        cancel_token: CancellationToken,
-    ) -> Result<()> {
-        let token = token_manager.get_token().await.context("auth failed")?;
-
-        let ws_stream = connect_to_twitch().await?;
-        let (write_sink, read_stream) = ws_stream.split();
-        let (cmd_tx, cmd_rx) = mpsc::channel::<String>(WS_CMD_BUFFER_SIZE);
-
-        let (writer_error_tx, writer_error_rx) = tokio::sync::oneshot::channel::<()>();
-
-        spawn_writer_actor(write_sink, cmd_rx, writer_error_tx);
-        perform_handshake(&cmd_tx, &token, &nick, &channel).await?;
-
-        run_reader_loop(
-            read_stream,
-            event_tx,
-            cmd_tx,
-            parser,
-            cancel_token,
-            writer_error_rx,
-        )
-        .await?;
-
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl<P: MessageParser + Send + Sync + 'static + Clone> EventFetcher for IrcFetcher<P> {
-    type Event = Event;
-
-    async fn fetch(&self) -> mpsc::Receiver<Self::Event> {
+    pub async fn connect(&self) -> Result<mpsc::Receiver<TwitchEvent>> {
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
 
         let tm = self.token_manager.clone();
-        let parser = self.parser.clone();
-        let ch = self.channel.clone();
-        let nk = self.nick.clone();
+        let nick = self.nick.clone();
+        let channel = self.channel.clone();
         let cancel = self.cancel_token.clone();
+        let url = self
+            .custom_url
+            .clone()
+            .unwrap_or_else(|| TWITCH_WS_URL.to_string());
 
         tokio::spawn(async move {
-            info!("starting IRC fetcher lifecycle...");
+            info!("starting IRC client lifecycle...");
 
             loop {
                 tokio::select! {
                     biased;
 
                     _ = cancel.cancelled() => {
-                        info!("fetcher cancelled, shutting down");
+                        info!("IRC client cancelled, shutting down");
                         break;
                     }
 
-                    result = Self::run_lifecycle(
+                    result = run_lifecycle(
                         tx.clone(),
                         tm.clone(),
-                        parser.clone(),
-                        nk.clone(),
-                        ch.clone(),
+                        nick.clone(),
+                        channel.clone(),
                         cancel.clone(),
+                        url.clone(),
                     ) => {
                         if let Err(e) = result {
                             if cancel.is_cancelled() {
-                                info!("fetcher shutdown complete");
+                                info!("IRC client shutdown complete");
                                 break;
                             }
                             error!("twitch connection lost: {:?}. reconnecting in {}s...", e, RECONNECT_DELAY_SECS);
@@ -171,14 +105,37 @@ impl<P: MessageParser + Send + Sync + 'static + Clone> EventFetcher for IrcFetch
             }
         });
 
-        rx
+        Ok(rx)
     }
 }
 
-#[allow(dead_code)]
-async fn connect_to_twitch() -> Result<WsStream> {
-    let url = Url::parse(TWITCH_WS_URL)?;
-    info!("connecting to twitch ws: {}", url);
+async fn run_lifecycle(
+    event_tx: mpsc::Sender<TwitchEvent>,
+    token_manager: Arc<TokenManager>,
+    nick: String,
+    channel: String,
+    cancel_token: CancellationToken,
+    ws_url: String,
+) -> Result<()> {
+    let token = token_manager.get_token().await.context("auth failed")?;
+
+    let ws_stream = connect_to_url(&ws_url).await?;
+    let (write_sink, read_stream) = ws_stream.split();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<String>(WS_CMD_BUFFER_SIZE);
+
+    let (writer_error_tx, writer_error_rx) = tokio::sync::oneshot::channel::<()>();
+
+    spawn_writer_actor(write_sink, cmd_rx, writer_error_tx);
+    perform_handshake(&cmd_tx, &token, &nick, &channel).await?;
+
+    run_reader_loop(read_stream, event_tx, cmd_tx, cancel_token, writer_error_rx).await?;
+
+    Ok(())
+}
+
+async fn connect_to_url(ws_url: &str) -> Result<WsStream> {
+    let url = Url::parse(ws_url)?;
+    info!("connecting to ws: {}", url);
     let (ws_stream, _) = connect_async(url.to_string())
         .await
         .context("ws handshake failed")?;
@@ -202,7 +159,6 @@ fn spawn_writer_actor(
     });
 }
 
-#[allow(dead_code)]
 async fn perform_handshake(
     cmd_tx: &mpsc::Sender<String>,
     token: &str,
@@ -219,12 +175,10 @@ async fn perform_handshake(
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn run_reader_loop<P: MessageParser>(
+async fn run_reader_loop(
     mut stream: WsReader,
-    event_tx: mpsc::Sender<Event>,
+    event_tx: mpsc::Sender<TwitchEvent>,
     cmd_tx: mpsc::Sender<String>,
-    parser: P,
     cancel_token: CancellationToken,
     mut writer_error_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
@@ -252,7 +206,7 @@ async fn run_reader_loop<P: MessageParser>(
 
                 match msg {
                     Message::Text(text) => {
-                        handle_text_message(&text, &event_tx, &cmd_tx, &parser).await?;
+                        handle_text_message(&text, &event_tx, &cmd_tx).await?;
                     }
                     Message::Close(_) => {
                         info!("twitch sent close frame");
@@ -266,12 +220,10 @@ async fn run_reader_loop<P: MessageParser>(
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn handle_text_message<P: MessageParser>(
+async fn handle_text_message(
     text: &str,
-    event_tx: &mpsc::Sender<Event>,
+    event_tx: &mpsc::Sender<TwitchEvent>,
     cmd_tx: &mpsc::Sender<String>,
-    parser: &P,
 ) -> Result<()> {
     for pong in text
         .lines()
@@ -281,7 +233,7 @@ async fn handle_text_message<P: MessageParser>(
         cmd_tx.send(pong).await.ok();
     }
 
-    let events = parser.parse(text);
+    let events = parse_irc_messages(text);
     for event in events {
         if event_tx.send(event).await.is_err() {
             return Err(anyhow::anyhow!("event receiver dropped"));
@@ -289,15 +241,4 @@ async fn handle_text_message<P: MessageParser>(
     }
 
     Ok(())
-}
-
-#[allow(dead_code)]
-fn parse_channels(config: &Config) -> Result<Vec<String>> {
-    Ok(config
-        .require("TWITCH_CHANNELS")?
-        .trim()
-        .split(';')
-        .filter(|c| !c.is_empty())
-        .map(|c| c.trim().to_lowercase())
-        .collect())
 }

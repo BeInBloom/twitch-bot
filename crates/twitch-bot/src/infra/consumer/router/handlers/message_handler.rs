@@ -4,7 +4,7 @@ use tracing::info;
 use crate::{domain::models::Event, infra::consumer::router::traits::Handler};
 
 #[non_exhaustive]
-struct MessageHandler;
+pub struct MessageHandler;
 
 impl MessageHandler {
     pub fn new() -> Self {

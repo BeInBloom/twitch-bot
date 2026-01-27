@@ -3,11 +3,12 @@ mod domain;
 mod infra;
 
 use core::App;
-use infra::{Config, UnixSignalHandler};
+use infra::{Config, TwitchFetcher, UnixSignalHandler};
+use std::sync::Arc;
 
 use crate::infra::{
     consumer::{Consumer, router::base_router::base_router::BaseRouter},
-    fetchers::EventSubFetcher,
+    message_handler::MessageHandler,
 };
 
 #[tokio::main]
@@ -16,11 +17,12 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::new();
 
-    let router = BaseRouter::new();
+    let mut router = BaseRouter::new();
+    router.add_route("message", Arc::new(MessageHandler::new()));
     let consumer = Consumer::new(router);
 
-    let irc_fetcher = EventSubFetcher::new(&config).await?;
-    let app = App::new(UnixSignalHandler::new(), irc_fetcher, consumer)?;
+    let fetcher = TwitchFetcher::new(&config).await?;
+    let app = App::new(UnixSignalHandler::new(), fetcher, consumer)?;
 
     app.run().await
 }

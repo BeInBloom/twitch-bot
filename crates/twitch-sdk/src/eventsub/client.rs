@@ -2,10 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
@@ -13,16 +12,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-use crate::{
-    domain::{
-        fetcher::EventFetcher,
-        models::{Event, EventContext, EventKind, Platform, Role, User},
-    },
-    infra::Config,
+use super::types::{
+    ChatBadge, ChatMessageEvent, EventSubMessage, NotificationPayload, RewardRedemptionEvent,
+    Session, SessionPayload,
 };
-
-use super::twitch_auth::TokenManager;
-
+use crate::auth::TokenManager;
+use crate::types::{TwitchEvent, TwitchRole, TwitchUser};
 const EVENTSUB_WS_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const EVENTSUB_API_URL: &str = "https://api.twitch.tv/helix/eventsub/subscriptions";
 const CHANNEL_BUFFER_SIZE: usize = 100;
@@ -30,84 +25,6 @@ const RECONNECT_DELAY_SECS: u64 = 5;
 const KEEPALIVE_TIMEOUT_BUFFER_SECS: u64 = 5;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-#[derive(Debug, Deserialize)]
-struct EventSubMessage {
-    metadata: MessageMetadata,
-    payload: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct MessageMetadata {
-    message_type: String,
-    #[serde(default)]
-    subscription_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionPayload {
-    session: Session,
-}
-
-#[derive(Debug, Deserialize)]
-struct Session {
-    id: String,
-    keepalive_timeout_seconds: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct NotificationPayload {
-    event: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct RewardRedemptionEvent {
-    user_id: String,
-    user_name: String,
-    user_input: Option<String>,
-    reward: RewardInfo,
-}
-
-#[derive(Debug, Deserialize)]
-struct RewardInfo {
-    id: String,
-    title: String,
-    cost: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatMessageEvent {
-    #[allow(dead_code)]
-    broadcaster_user_id: String,
-    chatter_user_id: String,
-    chatter_user_name: String,
-    message: ChatMessage,
-    badges: Vec<ChatBadge>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatMessage {
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatBadge {
-    set_id: String,
-}
-
-fn determine_role_from_badges(badges: &[ChatBadge]) -> Role {
-    let mut role = Role::new();
-    for badge in badges {
-        match badge.set_id.as_str() {
-            "broadcaster" => role.add(Role::BROADCASTER),
-            "moderator" => role.add(Role::MODERATOR),
-            "vip" => role.add(Role::VIP),
-            "subscriber" | "founder" => role.add(Role::SUBSCRIBER),
-            _ => {}
-        }
-    }
-    role
-}
 
 #[derive(Debug, Serialize)]
 struct SubscriptionRequest {
@@ -124,7 +41,7 @@ struct Transport {
     session_id: String,
 }
 
-pub struct EventSubFetcher {
+pub struct EventSubClient {
     token_manager: Arc<TokenManager>,
     client: Client,
     broadcaster_id: String,
@@ -133,7 +50,7 @@ pub struct EventSubFetcher {
 }
 
 struct EventSubLifecycleParams {
-    event_tx: mpsc::Sender<Event>,
+    event_tx: mpsc::Sender<TwitchEvent>,
     token_manager: Arc<TokenManager>,
     client: Client,
     broadcaster_id: String,
@@ -141,76 +58,34 @@ struct EventSubLifecycleParams {
     cancel_token: CancellationToken,
 }
 
-impl EventSubFetcher {
-    pub async fn new(config: &Config) -> Result<Self> {
-        Self::with_cancel_token(config, CancellationToken::new()).await
-    }
-
-    pub async fn with_cancel_token(
-        config: &Config,
-        cancel_token: CancellationToken,
-    ) -> Result<Self> {
-        let client_id = config.require("TWITCH_CLIENT_ID")?.to_string();
-        let client_secret = config.require("TWITCH_CLIENT_SECRET")?.to_string();
-        let refresh_token = config.require("TWITCH_REFRESH_TOKEN")?.to_string();
-        let broadcaster_id = config.require("TWITCH_BROADCASTER_ID")?.to_string();
-
-        let token_manager = Arc::new(TokenManager::new(
-            client_id.clone(),
-            client_secret,
-            refresh_token,
-        ));
-        let _bg_handle = token_manager.clone().start_background_loop();
-
-        Ok(Self {
+impl EventSubClient {
+    #[must_use]
+    pub fn new(
+        token_manager: Arc<TokenManager>,
+        client_id: String,
+        broadcaster_id: String,
+    ) -> Self {
+        Self {
             token_manager,
             client: Client::new(),
             broadcaster_id,
             client_id,
-            cancel_token,
-        })
+            cancel_token: CancellationToken::new(),
+        }
     }
 
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.cancel_token = token;
+        self
+    }
+
+    #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel_token.clone()
     }
 
-    async fn run_lifecycle(params: EventSubLifecycleParams) -> Result<()> {
-        let EventSubLifecycleParams {
-            event_tx,
-            token_manager,
-            client,
-            broadcaster_id,
-            client_id,
-            cancel_token,
-        } = params;
-        let url = Url::parse(EVENTSUB_WS_URL)?;
-        info!("connecting to EventSub: {}", url);
-        let (mut ws_stream, _) = connect_async(url.to_string())
-            .await
-            .context("EventSub WebSocket connection failed")?;
-
-        let session = receive_welcome(&mut ws_stream).await?;
-        info!("EventSub session established: {}", session.id);
-
-        let token = token_manager.get_token().await?;
-        let api_token = token.strip_prefix("oauth:").unwrap_or(&token);
-
-        subscribe_to_rewards(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
-        subscribe_to_chat(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
-
-        let keepalive_timeout =
-            Duration::from_secs(session.keepalive_timeout_seconds + KEEPALIVE_TIMEOUT_BUFFER_SECS);
-
-        run_eventsub_loop(ws_stream, event_tx, cancel_token, keepalive_timeout).await
-    }
-}
-
-#[async_trait]
-impl EventFetcher for EventSubFetcher {
-    type Event = Event;
-
-    async fn fetch(&self) -> mpsc::Receiver<Self::Event> {
+    pub async fn connect(&self) -> Result<mpsc::Receiver<TwitchEvent>> {
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
 
         let tm = self.token_manager.clone();
@@ -220,18 +95,18 @@ impl EventFetcher for EventSubFetcher {
         let cancel = self.cancel_token.clone();
 
         tokio::spawn(async move {
-            info!("starting EventSub fetcher lifecycle...");
+            info!("starting EventSub client lifecycle...");
 
             loop {
                 tokio::select! {
                     biased;
 
                     _ = cancel.cancelled() => {
-                        info!("EventSub fetcher cancelled");
+                        info!("EventSub client cancelled");
                         break;
                     }
 
-                    result = Self::run_lifecycle(EventSubLifecycleParams {
+                    result = run_lifecycle(EventSubLifecycleParams {
                         event_tx: tx.clone(),
                         token_manager: tm.clone(),
                         client: client.clone(),
@@ -252,8 +127,39 @@ impl EventFetcher for EventSubFetcher {
             }
         });
 
-        rx
+        Ok(rx)
     }
+}
+
+async fn run_lifecycle(params: EventSubLifecycleParams) -> Result<()> {
+    let EventSubLifecycleParams {
+        event_tx,
+        token_manager,
+        client,
+        broadcaster_id,
+        client_id,
+        cancel_token,
+    } = params;
+
+    let url = Url::parse(EVENTSUB_WS_URL)?;
+    info!("connecting to EventSub: {}", url);
+    let (mut ws_stream, _) = connect_async(url.to_string())
+        .await
+        .context("EventSub WebSocket connection failed")?;
+
+    let session = receive_welcome(&mut ws_stream).await?;
+    info!("EventSub session established: {}", session.id);
+
+    let token = token_manager.get_token().await?;
+    let api_token = token.strip_prefix("oauth:").unwrap_or(&token);
+
+    subscribe_to_rewards(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
+    subscribe_to_chat(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
+
+    let keepalive_timeout =
+        Duration::from_secs(session.keepalive_timeout_seconds + KEEPALIVE_TIMEOUT_BUFFER_SECS);
+
+    run_eventsub_loop(ws_stream, event_tx, cancel_token, keepalive_timeout).await
 }
 
 async fn receive_welcome(ws: &mut WsStream) -> Result<Session> {
@@ -386,7 +292,7 @@ async fn subscribe_to_chat(
 
 async fn run_eventsub_loop(
     mut ws: WsStream,
-    event_tx: mpsc::Sender<Event>,
+    event_tx: mpsc::Sender<TwitchEvent>,
     cancel_token: CancellationToken,
     keepalive_timeout: Duration,
 ) -> Result<()> {
@@ -421,7 +327,7 @@ async fn run_eventsub_loop(
     }
 }
 
-async fn handle_eventsub_message(msg: Message, event_tx: &mpsc::Sender<Event>) -> Result<()> {
+async fn handle_eventsub_message(msg: Message, event_tx: &mpsc::Sender<TwitchEvent>) -> Result<()> {
     let text = match msg {
         Message::Text(t) => t,
         Message::Close(_) => {
@@ -460,7 +366,24 @@ async fn handle_eventsub_message(msg: Message, event_tx: &mpsc::Sender<Event>) -
     Ok(())
 }
 
-async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Event>) -> Result<()> {
+fn determine_role_from_badges(badges: &[ChatBadge]) -> TwitchRole {
+    let mut role = TwitchRole::empty();
+    for badge in badges {
+        match badge.set_id.as_str() {
+            "broadcaster" => role.add(TwitchRole::BROADCASTER),
+            "moderator" => role.add(TwitchRole::MODERATOR),
+            "vip" => role.add(TwitchRole::VIP),
+            "subscriber" | "founder" => role.add(TwitchRole::SUBSCRIBER),
+            _ => {}
+        }
+    }
+    role
+}
+
+async fn handle_notification(
+    msg: &EventSubMessage,
+    event_tx: &mpsc::Sender<TwitchEvent>,
+) -> Result<()> {
     let sub_type = msg.metadata.subscription_type.as_deref().unwrap_or("");
 
     match sub_type {
@@ -468,22 +391,16 @@ async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Even
             let payload: NotificationPayload = serde_json::from_value(msg.payload.clone())?;
             let redemption: RewardRedemptionEvent = serde_json::from_value(payload.event)?;
 
-            let event = Event {
-                ctx: EventContext {
-                    user: User {
-                        id: redemption.user_id,
-                        display_name: redemption.user_name,
-                        platform: Platform::Twitch,
-                        role: Role::new(),
-                    },
-                    channel: None,
+            let event = TwitchEvent::RewardRedemption {
+                user: TwitchUser {
+                    id: redemption.user_id,
+                    display_name: redemption.user_name,
+                    role: TwitchRole::empty(),
                 },
-                kind: EventKind::RewardRedemption {
-                    reward_id: redemption.reward.id,
-                    reward_title: redemption.reward.title,
-                    cost: redemption.reward.cost,
-                    user_input: redemption.user_input,
-                },
+                reward_id: redemption.reward.id,
+                reward_title: redemption.reward.title,
+                cost: redemption.reward.cost,
+                user_input: redemption.user_input,
             };
 
             if event_tx.send(event).await.is_err() {
@@ -496,19 +413,14 @@ async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Even
 
             let role = determine_role_from_badges(&chat_msg.badges);
 
-            let event = Event {
-                ctx: EventContext {
-                    user: User {
-                        id: chat_msg.chatter_user_id,
-                        display_name: chat_msg.chatter_user_name,
-                        platform: Platform::Twitch,
-                        role,
-                    },
-                    channel: None,
+            let event = TwitchEvent::ChatMessage {
+                user: TwitchUser {
+                    id: chat_msg.chatter_user_id,
+                    display_name: chat_msg.chatter_user_name,
+                    role,
                 },
-                kind: EventKind::ChatMessage {
-                    text: chat_msg.message.text,
-                },
+                channel: None,
+                text: chat_msg.message.text,
             };
 
             if event_tx.send(event).await.is_err() {
@@ -527,8 +439,8 @@ async fn handle_notification(msg: &EventSubMessage, event_tx: &mpsc::Sender<Even
 mod tests {
     use super::*;
 
-    fn role(flag: u8) -> Role {
-        let mut r = Role::new();
+    fn role(flag: u8) -> TwitchRole {
+        let mut r = TwitchRole::empty();
         r.add(flag);
         r
     }
@@ -545,34 +457,37 @@ mod tests {
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["broadcaster", "moderator"])),
-            role(Role::BROADCASTER | Role::MODERATOR)
+            role(TwitchRole::BROADCASTER | TwitchRole::MODERATOR)
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["moderator", "subscriber"])),
-            role(Role::MODERATOR | Role::SUBSCRIBER)
+            role(TwitchRole::MODERATOR | TwitchRole::SUBSCRIBER)
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["vip", "subscriber"])),
-            role(Role::VIP | Role::SUBSCRIBER)
+            role(TwitchRole::VIP | TwitchRole::SUBSCRIBER)
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["subscriber"])),
-            role(Role::SUBSCRIBER)
+            role(TwitchRole::SUBSCRIBER)
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["founder"])),
-            role(Role::SUBSCRIBER)
+            role(TwitchRole::SUBSCRIBER)
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["no_audio"])),
-            Role::new()
+            TwitchRole::empty()
         );
-        assert_eq!(determine_role_from_badges(&make_badges(&[])), Role::new());
+        assert_eq!(
+            determine_role_from_badges(&make_badges(&[])),
+            TwitchRole::empty()
+        );
     }
 
     #[test]
@@ -691,9 +606,9 @@ mod tests {
         assert_eq!(event.message.text, "Hello world!");
 
         let actual_role = determine_role_from_badges(&event.badges);
-        let mut expected_role = Role::new();
-        expected_role.add(Role::MODERATOR);
-        expected_role.add(Role::SUBSCRIBER);
+        let mut expected_role = TwitchRole::empty();
+        expected_role.add(TwitchRole::MODERATOR);
+        expected_role.add(TwitchRole::SUBSCRIBER);
 
         assert_eq!(actual_role, expected_role);
     }

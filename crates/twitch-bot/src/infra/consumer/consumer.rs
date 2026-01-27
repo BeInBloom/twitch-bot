@@ -1,5 +1,7 @@
+use anyhow::Error;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tracing::error;
 
 use crate::{
     domain::{consumer::EventConsumer, models::Event},
@@ -18,11 +20,15 @@ impl<R: Handler> Consumer<R> {
 
 #[async_trait]
 impl<R: Handler> EventConsumer for Consumer<R> {
-    type Event = Event;
-
-    async fn consume(&self, mut ch: mpsc::Receiver<Self::Event>) {
+    async fn consume(&self, mut ch: mpsc::Receiver<Event>) {
         while let Some(event) = ch.recv().await {
-            println!("{:?}", event);
+            if let Err(e) = self.router.handle(event).await {
+                handle_error(e);
+            }
         }
     }
+}
+
+fn handle_error(e: Error) {
+    error!("something wrong: {}", e);
 }

@@ -1,9 +1,11 @@
 pub mod config;
+pub mod consumer;
+pub mod fetchers;
 pub mod logging;
 pub mod signal;
-pub mod fetchers;
-pub mod consumer;
 
 pub use config::Config;
+pub use consumer::message_handler;
+pub use fetchers::TwitchFetcher;
 pub use logging::LogGuard;
 pub use signal::UnixSignalHandler;

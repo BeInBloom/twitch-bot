@@ -33,6 +33,7 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
+    #[must_use]
     pub fn new(client_id: String, client_secret: String, refresh_token: String) -> Self {
         Self {
             client: Client::new(),
@@ -45,6 +46,7 @@ impl TokenManager {
         }
     }
 
+    #[must_use]
     pub fn with_rotation_callback(mut self, callback: OnTokenRotation) -> Self {
         self.on_rotation = Some(callback);
         self
@@ -140,7 +142,8 @@ impl TokenManager {
         Ok((full_token, res.expires_in))
     }
 
-    #[cfg(test)]
+    /// Set a token directly, bypassing OAuth refresh. For testing only.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn set_token_for_test(&self, token: String) {
         let mut lock = self.current_token.write().await;
         *lock = Some(token);

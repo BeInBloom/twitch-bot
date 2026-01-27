@@ -1492,6 +1492,20 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dotenv",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "twitch-sdk",
+]
+
+[[package]]
+name = "twitch-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "futures-util",
  "reqwest",
  "serde",
@@ -1501,8 +1515,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
+ "twitch-sdk",
  "url",
 ]
 

@@ -3,12 +3,7 @@ use crate::{
     infra::LogGuard,
 };
 
-pub struct App<S, F, C>
-where
-    S: SignalHandler,
-    F: EventFetcher,
-    C: EventConsumer<Event = F::Event>,
-{
+pub struct App<S, F, C> {
     _log_guard: LogGuard,
     signal_handler: S,
     fetcher: F,
@@ -19,7 +14,7 @@ impl<S, F, C> App<S, F, C>
 where
     S: SignalHandler,
     F: EventFetcher,
-    C: EventConsumer<Event = F::Event>,
+    C: EventConsumer,
 {
     pub fn new(signal_handler: S, fetcher: F, consumer: C) -> anyhow::Result<Self> {
         let log_guard = LogGuard::init();
