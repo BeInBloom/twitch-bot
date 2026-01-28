@@ -1,7 +1,7 @@
-pub mod signal;
+pub mod consumer;
 pub mod fetcher;
 pub mod models;
-pub mod consumer;
 pub mod sender;
+pub mod signal;
 
 pub use signal::{ShutdownKind, SignalHandler};

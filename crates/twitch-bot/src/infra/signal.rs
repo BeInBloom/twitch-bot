@@ -13,7 +13,7 @@ impl Default for UnixSignalHandler {
 
 impl UnixSignalHandler {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
