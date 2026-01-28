@@ -125,6 +125,15 @@ impl From<TwitchEvent> for Event {
                     user_input,
                 },
             },
+            _ => Event {
+                ctx: EventContext {
+                    user: User::system(),
+                    channel: None,
+                },
+                kind: EventKind::System {
+                    message: "Unknown event type".to_string(),
+                },
+            },
         }
     }
 }

@@ -12,6 +12,12 @@ impl CommandHandler {
     }
 }
 
+impl Default for CommandHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Handler for CommandHandler {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {

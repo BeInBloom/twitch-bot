@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct TwitchRole(u8);
 
 impl TwitchRole {
@@ -41,6 +42,7 @@ impl TwitchRole {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TwitchUser {
     pub id: String,
     pub display_name: String,
@@ -48,6 +50,7 @@ pub struct TwitchUser {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum TwitchEvent {
     ChatMessage {
         user: TwitchUser,

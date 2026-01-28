@@ -22,6 +22,7 @@ struct TokenResponse {
 
 pub type OnTokenRotation = Box<dyn Fn(&str) + Send + Sync>;
 
+#[non_exhaustive]
 pub struct TokenManager {
     client: Client,
     client_id: String,

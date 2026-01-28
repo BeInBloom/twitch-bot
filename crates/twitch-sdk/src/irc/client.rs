@@ -23,6 +23,7 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
 type WsReader = futures_util::stream::SplitStream<WsStream>;
 
+#[non_exhaustive]
 pub struct IrcClient {
     token_manager: Arc<TokenManager>,
     nick: String,

@@ -42,6 +42,7 @@ struct Transport {
     session_id: String,
 }
 
+#[non_exhaustive]
 pub struct EventSubClient {
     token_manager: Arc<TokenManager>,
     client: Client,

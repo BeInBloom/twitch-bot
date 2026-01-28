@@ -20,10 +20,12 @@ impl Role {
     pub const BROADCASTER: Role =
         Role(Self::BIT_BROADCASTER | Self::BIT_MODERATOR | Self::BIT_VIP | Self::BIT_SUBSCRIBER);
 
+    #[must_use]
     pub fn new() -> Self {
         Self::PLEB
     }
 
+    #[must_use]
     pub fn empty() -> Self {
         Self(0)
     }
