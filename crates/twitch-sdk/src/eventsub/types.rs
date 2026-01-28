@@ -48,6 +48,7 @@ pub struct RewardInfo {
 pub struct ChatMessageEvent {
     #[allow(dead_code)]
     pub broadcaster_user_id: String,
+    pub broadcaster_user_login: String,
     pub chatter_user_id: String,
     pub chatter_user_name: String,
     pub message: ChatMessage,

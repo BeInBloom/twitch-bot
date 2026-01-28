@@ -438,7 +438,7 @@ async fn handle_notification(
                     display_name: chat_msg.chatter_user_name,
                     role,
                 },
-                channel: None,
+                channel: Some(chat_msg.broadcaster_user_login),
                 text: chat_msg.message.text,
             };
 

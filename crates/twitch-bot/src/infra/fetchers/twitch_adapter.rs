@@ -69,7 +69,7 @@ impl EventFetcher for TwitchFetcher {
         tokio::spawn(async move {
             let mut sdk_rx = sdk_rx;
             while let Some(twitch_event) = sdk_rx.recv().await {
-                let event = convert_to_domain(twitch_event);
+                let event = twitch_event.into();
                 if let Err(e) = tx.send(event).await {
                     debug!("error during data transmission: {}", e);
                     break;
@@ -81,37 +81,39 @@ impl EventFetcher for TwitchFetcher {
     }
 }
 
-fn convert_to_domain(e: TwitchEvent) -> Event {
-    match e {
-        TwitchEvent::ChatMessage {
-            user,
-            channel,
-            text,
-        } => Event {
-            ctx: EventContext {
-                user: convert_user(user),
+impl From<TwitchEvent> for Event {
+    fn from(event: TwitchEvent) -> Self {
+        match event {
+            TwitchEvent::ChatMessage {
+                user,
                 channel,
+                text,
+            } => Event {
+                ctx: EventContext {
+                    user: convert_user(user),
+                    channel,
+                },
+                kind: text.as_str().into(),
             },
-            kind: text.as_str().into(),
-        },
-        TwitchEvent::RewardRedemption {
-            user,
-            reward_id,
-            reward_title,
-            cost,
-            user_input,
-        } => Event {
-            ctx: EventContext {
-                user: convert_user(user),
-                channel: None,
-            },
-            kind: EventKind::RewardRedemption {
+            TwitchEvent::RewardRedemption {
+                user,
                 reward_id,
                 reward_title,
                 cost,
                 user_input,
+            } => Event {
+                ctx: EventContext {
+                    user: convert_user(user),
+                    channel: None,
+                },
+                kind: EventKind::RewardRedemption {
+                    reward_id,
+                    reward_title,
+                    cost,
+                    user_input,
+                },
             },
-        },
+        }
     }
 }
 
