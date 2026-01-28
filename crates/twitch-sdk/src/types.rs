@@ -2,47 +2,41 @@
 pub struct TwitchRole(u8);
 
 impl TwitchRole {
-    pub const SUBSCRIBER: u8 = 1 << 0;
-    pub const VIP: u8 = 1 << 1;
-    pub const MODERATOR: u8 = 1 << 2;
-    pub const BROADCASTER: u8 = 1 << 3;
+    const BIT_SUBSCRIBER: u8 = 1 << 0;
+    const BIT_VIP: u8 = 1 << 1;
+    const BIT_MODERATOR: u8 = 1 << 2;
+    const BIT_BROADCASTER: u8 = 1 << 3;
+
+    pub const SUBSCRIBER: TwitchRole = TwitchRole(Self::BIT_SUBSCRIBER);
+    pub const VIP: TwitchRole = TwitchRole(Self::BIT_VIP);
+    pub const MODERATOR: TwitchRole = TwitchRole(Self::BIT_MODERATOR);
+    pub const BROADCASTER: TwitchRole = TwitchRole(Self::BIT_BROADCASTER);
 
     #[must_use]
     pub fn empty() -> Self {
         Self(0)
     }
 
-    pub fn add(&mut self, flag: u8) {
-        self.0 |= flag;
-    }
-
-    pub fn merge(&mut self, other: TwitchRole) {
+    pub fn add(&mut self, other: TwitchRole) {
         self.0 |= other.0;
     }
 
+    /// Returns the highest priority role from the combined roles.
+    /// Priority: BROADCASTER > MODERATOR > VIP > SUBSCRIBER > empty
     #[must_use]
-    pub fn contains(&self, flag: u8) -> bool {
-        (self.0 & flag) != 0
-    }
-
-    #[must_use]
-    pub fn is_broadcaster(&self) -> bool {
-        self.contains(Self::BROADCASTER)
-    }
-
-    #[must_use]
-    pub fn is_moderator(&self) -> bool {
-        self.contains(Self::MODERATOR)
-    }
-
-    #[must_use]
-    pub fn is_vip(&self) -> bool {
-        self.contains(Self::VIP)
-    }
-
-    #[must_use]
-    pub fn is_subscriber(&self) -> bool {
-        self.contains(Self::SUBSCRIBER)
+    pub fn highest(&self) -> TwitchRole {
+        const PRIORITY: [u8; 4] = [
+            TwitchRole::BIT_BROADCASTER,
+            TwitchRole::BIT_MODERATOR,
+            TwitchRole::BIT_VIP,
+            TwitchRole::BIT_SUBSCRIBER,
+        ];
+        for bit in PRIORITY {
+            if self.0 & bit != 0 {
+                return TwitchRole(bit);
+            }
+        }
+        TwitchRole(0)
     }
 }
 

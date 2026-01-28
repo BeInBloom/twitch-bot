@@ -116,7 +116,7 @@ fn parse_tags(tags: &str) -> UserMeta<'_> {
             "subscriber" if val == "1" => role.add(TwitchRole::SUBSCRIBER),
             "badges" => {
                 let badge_role = parse_badges(val);
-                role.merge(badge_role);
+                role.add(badge_role);
             }
             _ => {}
         }
@@ -144,9 +144,11 @@ mod tests {
         events.into_iter().next().unwrap()
     }
 
-    fn role(flag: u8) -> TwitchRole {
+    fn make_role(roles: &[TwitchRole]) -> TwitchRole {
         let mut r = TwitchRole::empty();
-        r.add(flag);
+        for role in roles {
+            r.add(*role);
+        }
         r
     }
 
@@ -180,7 +182,7 @@ mod tests {
             &event,
             "12345",
             "TestUser",
-            role(TwitchRole::BROADCASTER),
+            TwitchRole::BROADCASTER,
             "Hello world!",
         );
     }
@@ -203,35 +205,35 @@ mod tests {
     fn test_parse_broadcaster() {
         let raw = "@badges=broadcaster/1;display-name=Streamer;user-id=1 :s PRIVMSG #ch :hi";
         let event = parse_one(raw);
-        assert_chat_message(&event, "1", "Streamer", role(TwitchRole::BROADCASTER), "hi");
+        assert_chat_message(&event, "1", "Streamer", TwitchRole::BROADCASTER, "hi");
     }
 
     #[test]
     fn test_parse_mod() {
         let raw = "@mod=1;display-name=ModUser;user-id=2 :m PRIVMSG #ch :hi";
         let event = parse_one(raw);
-        assert_chat_message(&event, "2", "ModUser", role(TwitchRole::MODERATOR), "hi");
+        assert_chat_message(&event, "2", "ModUser", TwitchRole::MODERATOR, "hi");
     }
 
     #[test]
     fn test_parse_vip() {
         let raw = "@badges=vip/1;display-name=VipUser;user-id=3 :v PRIVMSG #ch :hi";
         let event = parse_one(raw);
-        assert_chat_message(&event, "3", "VipUser", role(TwitchRole::VIP), "hi");
+        assert_chat_message(&event, "3", "VipUser", TwitchRole::VIP, "hi");
     }
 
     #[test]
     fn test_parse_subscriber() {
         let raw = "@subscriber=1;display-name=SubUser;user-id=4 :s PRIVMSG #ch :hi";
         let event = parse_one(raw);
-        assert_chat_message(&event, "4", "SubUser", role(TwitchRole::SUBSCRIBER), "hi");
+        assert_chat_message(&event, "4", "SubUser", TwitchRole::SUBSCRIBER, "hi");
     }
 
     #[test]
     fn test_parse_subscriber_badge() {
         let raw = "@badges=subscriber/12;display-name=SubUser;user-id=5 :s PRIVMSG #ch :hi";
         let event = parse_one(raw);
-        assert_chat_message(&event, "5", "SubUser", role(TwitchRole::SUBSCRIBER), "hi");
+        assert_chat_message(&event, "5", "SubUser", TwitchRole::SUBSCRIBER, "hi");
     }
 
     #[test]
@@ -249,7 +251,7 @@ mod tests {
             &event,
             "1",
             "Test",
-            role(TwitchRole::BROADCASTER | TwitchRole::MODERATOR),
+            make_role(&[TwitchRole::BROADCASTER, TwitchRole::MODERATOR]),
             "hi",
         );
     }
@@ -262,7 +264,7 @@ mod tests {
             &event,
             "1",
             "Test",
-            role(TwitchRole::MODERATOR | TwitchRole::VIP),
+            make_role(&[TwitchRole::MODERATOR, TwitchRole::VIP]),
             "hi",
         );
     }

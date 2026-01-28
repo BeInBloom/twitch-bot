@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use twitch_sdk::{EventSubClient, TokenManager, TwitchEvent, TwitchRole};
+use twitch_sdk::{EventSubClient, TokenManager, TwitchEvent, TwitchRole, TwitchUser};
 
 use crate::domain::{
     fetcher::EventFetcher,
@@ -51,9 +51,21 @@ impl TwitchFetcher {
         })
     }
 
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.cancel_token.cancel();
+        self.client.lock().await.shutdown().await?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel_token.clone()
+    }
+}
+
+impl Drop for TwitchFetcher {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
     }
 }
 
@@ -90,7 +102,7 @@ impl From<TwitchEvent> for Event {
                 text,
             } => Event {
                 ctx: EventContext {
-                    user: convert_user(user),
+                    user: user.into(),
                     channel,
                 },
                 kind: text.as_str().into(),
@@ -103,7 +115,7 @@ impl From<TwitchEvent> for Event {
                 user_input,
             } => Event {
                 ctx: EventContext {
-                    user: convert_user(user),
+                    user: user.into(),
                     channel: None,
                 },
                 kind: EventKind::RewardRedemption {
@@ -117,28 +129,25 @@ impl From<TwitchEvent> for Event {
     }
 }
 
-fn convert_user(u: twitch_sdk::TwitchUser) -> User {
-    User {
-        id: u.id,
-        display_name: u.display_name,
-        platform: Platform::Twitch,
-        role: convert_role(u.role),
+impl From<TwitchUser> for User {
+    fn from(u: TwitchUser) -> Self {
+        User {
+            id: u.id,
+            display_name: u.display_name,
+            platform: Platform::Twitch,
+            role: u.role.into(),
+        }
     }
 }
 
-fn convert_role(r: TwitchRole) -> Role {
-    let mut role = Role::new();
-    if r.contains(TwitchRole::BROADCASTER) {
-        role.add(Role::BROADCASTER);
+impl From<TwitchRole> for Role {
+    fn from(r: TwitchRole) -> Self {
+        match r.highest() {
+            TwitchRole::BROADCASTER => Role::BROADCASTER,
+            TwitchRole::MODERATOR => Role::MODERATOR,
+            TwitchRole::VIP => Role::VIP,
+            TwitchRole::SUBSCRIBER => Role::SUBSCRIBER,
+            _ => Role::PLEB,
+        }
     }
-    if r.contains(TwitchRole::MODERATOR) {
-        role.add(Role::MODERATOR);
-    }
-    if r.contains(TwitchRole::VIP) {
-        role.add(Role::VIP);
-    }
-    if r.contains(TwitchRole::SUBSCRIBER) {
-        role.add(Role::SUBSCRIBER);
-    }
-    role
 }

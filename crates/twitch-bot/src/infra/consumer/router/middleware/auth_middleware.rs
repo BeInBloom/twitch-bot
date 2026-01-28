@@ -1,18 +1,18 @@
 use async_trait::async_trait;
 
 use crate::{
-    domain::models::{Event, User},
+    domain::models::{Event, Role, User},
     infra::consumer::router::traits::Handler,
 };
 
 #[non_exhaustive]
 pub struct AuthMiddleware<H> {
     inner: H,
-    role: u8,
+    role: Role,
 }
 
 impl<H> AuthMiddleware<H> {
-    pub fn new(inner: H, role: u8) -> Self {
+    pub fn new(inner: H, role: Role) -> Self {
         Self { inner, role }
     }
 }

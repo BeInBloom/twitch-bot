@@ -8,51 +8,48 @@ pub enum Platform {
 pub struct Role(u8);
 
 impl Role {
-    pub const BIT_SUBSCRIBER: u8 = 1 << 0;
-    pub const BIT_VIP: u8 = 1 << 1;
-    pub const BIT_MODERATOR: u8 = 1 << 2;
-    pub const BIT_BROADCASTER: u8 = 1 << 3;
+    const BIT_SUBSCRIBER: u8 = 1 << 0;
+    const BIT_VIP: u8 = 1 << 1;
+    const BIT_MODERATOR: u8 = 1 << 2;
+    const BIT_BROADCASTER: u8 = 1 << 3;
 
-    pub const PLEB: u8 = 0;
-    pub const SUBSCRIBER: u8 = Self::BIT_SUBSCRIBER;
-    pub const VIP: u8 = Self::BIT_VIP | Self::SUBSCRIBER;
-    pub const MODERATOR: u8 = Self::BIT_MODERATOR | Self::VIP;
-    pub const BROADCASTER: u8 = Self::BIT_BROADCASTER | Self::MODERATOR;
+    pub const PLEB: Role = Role(0);
+    pub const SUBSCRIBER: Role = Role(Self::BIT_SUBSCRIBER);
+    pub const VIP: Role = Role(Self::BIT_VIP | Self::BIT_SUBSCRIBER);
+    pub const MODERATOR: Role = Role(Self::BIT_MODERATOR | Self::BIT_VIP | Self::BIT_SUBSCRIBER);
+    pub const BROADCASTER: Role =
+        Role(Self::BIT_BROADCASTER | Self::BIT_MODERATOR | Self::BIT_VIP | Self::BIT_SUBSCRIBER);
 
     pub fn new() -> Self {
-        Self(Self::PLEB)
+        Self::PLEB
     }
 
     pub fn empty() -> Self {
         Self(0)
     }
 
-    pub fn add(&mut self, flag: u8) {
-        self.0 |= flag;
-    }
-
-    pub fn merge(&mut self, other: Role) {
+    pub fn add(&mut self, other: Role) {
         self.0 |= other.0;
     }
 
-    pub fn contains(&self, flag: u8) -> bool {
-        (self.0 & flag) != 0
+    pub fn contains(&self, other: Role) -> bool {
+        (self.0 & other.0) == other.0
     }
 
     pub fn is_broadcaster(&self) -> bool {
-        self.contains(Self::BIT_BROADCASTER)
+        self.contains(Self::BROADCASTER)
     }
 
     pub fn is_moderator(&self) -> bool {
-        self.contains(Self::BIT_MODERATOR)
+        self.contains(Self::MODERATOR)
     }
 
     pub fn is_vip(&self) -> bool {
-        self.contains(Self::BIT_VIP)
+        self.contains(Self::VIP)
     }
 
     pub fn is_subscriber(&self) -> bool {
-        self.contains(Self::BIT_SUBSCRIBER)
+        self.contains(Self::SUBSCRIBER)
     }
 }
 
@@ -146,7 +143,7 @@ impl Event {
         &self.ctx.user
     }
 
-    pub fn has_role(&self, required: u8) -> bool {
+    pub fn has_role(&self, required: Role) -> bool {
         self.ctx.user.role.contains(required)
     }
 }

@@ -139,7 +139,7 @@ impl EventSubClient {
         Ok(rx)
     }
 
-    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.cancel_token.cancel();
         if let Some(handle) = self.handle.take() {
             handle.await?;
@@ -458,9 +458,11 @@ async fn handle_notification(
 mod tests {
     use super::*;
 
-    fn role(flag: u8) -> TwitchRole {
+    fn make_role(roles: &[TwitchRole]) -> TwitchRole {
         let mut r = TwitchRole::empty();
-        r.add(flag);
+        for role in roles {
+            r.add(*role);
+        }
         r
     }
 
@@ -476,27 +478,27 @@ mod tests {
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["broadcaster", "moderator"])),
-            role(TwitchRole::BROADCASTER | TwitchRole::MODERATOR)
+            make_role(&[TwitchRole::BROADCASTER, TwitchRole::MODERATOR])
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["moderator", "subscriber"])),
-            role(TwitchRole::MODERATOR | TwitchRole::SUBSCRIBER)
+            make_role(&[TwitchRole::MODERATOR, TwitchRole::SUBSCRIBER])
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["vip", "subscriber"])),
-            role(TwitchRole::VIP | TwitchRole::SUBSCRIBER)
+            make_role(&[TwitchRole::VIP, TwitchRole::SUBSCRIBER])
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["subscriber"])),
-            role(TwitchRole::SUBSCRIBER)
+            TwitchRole::SUBSCRIBER
         );
 
         assert_eq!(
             determine_role_from_badges(&make_badges(&["founder"])),
-            role(TwitchRole::SUBSCRIBER)
+            TwitchRole::SUBSCRIBER
         );
 
         assert_eq!(
