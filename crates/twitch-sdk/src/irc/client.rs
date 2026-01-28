@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -28,6 +29,13 @@ pub struct IrcClient {
     channel: String,
     cancel_token: CancellationToken,
     custom_url: Option<String>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for IrcClient {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+    }
 }
 
 impl IrcClient {
@@ -39,6 +47,7 @@ impl IrcClient {
             channel,
             cancel_token: CancellationToken::new(),
             custom_url: None,
+            handle: None,
         }
     }
 
@@ -60,7 +69,7 @@ impl IrcClient {
         self.cancel_token.clone()
     }
 
-    pub async fn connect(&self) -> Result<mpsc::Receiver<TwitchEvent>> {
+    pub async fn connect(&mut self) -> Result<mpsc::Receiver<TwitchEvent>> {
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
 
         let tm = self.token_manager.clone();
@@ -72,7 +81,7 @@ impl IrcClient {
             .clone()
             .unwrap_or_else(|| TWITCH_WS_URL.to_string());
 
-        tokio::spawn(async move {
+        self.handle = Some(tokio::spawn(async move {
             info!("starting IRC client lifecycle...");
 
             loop {
@@ -103,9 +112,17 @@ impl IrcClient {
                     }
                 }
             }
-        });
+        }));
 
         Ok(rx)
+    }
+
+    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+        self.cancel_token.cancel();
+        if let Some(handle) = self.handle.take() {
+            handle.await?;
+        }
+        Ok(())
     }
 }
 

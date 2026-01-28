@@ -110,7 +110,7 @@ async fn test_irc_client_sends_handshake_on_connect() {
     let token_manager = test_token_manager().await;
     let cancel = CancellationToken::new();
 
-    let client = IrcClient::new(
+    let mut client = IrcClient::new(
         token_manager,
         "test_nick".to_string(),
         "test_channel".to_string(),
@@ -136,7 +136,7 @@ async fn test_irc_client_responds_to_ping() {
     let token_manager = test_token_manager().await;
     let cancel = CancellationToken::new();
 
-    let client = IrcClient::new(
+    let mut client = IrcClient::new(
         token_manager,
         "test_nick".to_string(),
         "test_channel".to_string(),
@@ -163,7 +163,7 @@ async fn test_irc_client_receives_chat_message() {
     let token_manager = test_token_manager().await;
     let cancel = CancellationToken::new();
 
-    let client = IrcClient::new(
+    let mut client = IrcClient::new(
         token_manager,
         "test_nick".to_string(),
         "test_channel".to_string(),
@@ -202,7 +202,7 @@ async fn test_irc_client_handles_multiple_messages() {
     let token_manager = test_token_manager().await;
     let cancel = CancellationToken::new();
 
-    let client = IrcClient::new(
+    let mut client = IrcClient::new(
         token_manager,
         "test_nick".to_string(),
         "test_channel".to_string(),
@@ -258,7 +258,7 @@ async fn test_irc_client_cancellation() {
     let token_manager = test_token_manager().await;
     let cancel = CancellationToken::new();
 
-    let client = IrcClient::new(
+    let mut client = IrcClient::new(
         token_manager,
         "test_nick".to_string(),
         "test_channel".to_string(),

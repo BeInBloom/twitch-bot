@@ -118,23 +118,6 @@ pub enum EventKind {
     },
 }
 
-impl From<&str> for EventKind {
-    fn from(text: &str) -> Self {
-        text.strip_prefix('!')
-            .filter(|s| !s.is_empty())
-            .and_then(|rest| {
-                let mut parts = rest.split_whitespace();
-                parts.next().map(|name| EventKind::Command {
-                    name: name.to_string(),
-                    args: parts.map(String::from).collect(),
-                })
-            })
-            .unwrap_or_else(|| EventKind::ChatMessage {
-                text: text.to_string(),
-            })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Event {
     pub ctx: EventContext,

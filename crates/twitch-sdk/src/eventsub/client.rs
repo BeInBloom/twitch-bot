@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -47,6 +48,7 @@ pub struct EventSubClient {
     broadcaster_id: String,
     client_id: String,
     cancel_token: CancellationToken,
+    handle: Option<JoinHandle<()>>,
 }
 
 struct EventSubLifecycleParams {
@@ -56,6 +58,12 @@ struct EventSubLifecycleParams {
     broadcaster_id: String,
     client_id: String,
     cancel_token: CancellationToken,
+}
+
+impl Drop for EventSubClient {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+    }
 }
 
 impl EventSubClient {
@@ -71,6 +79,7 @@ impl EventSubClient {
             broadcaster_id,
             client_id,
             cancel_token: CancellationToken::new(),
+            handle: None,
         }
     }
 
@@ -85,7 +94,7 @@ impl EventSubClient {
         self.cancel_token.clone()
     }
 
-    pub async fn connect(&self) -> Result<mpsc::Receiver<TwitchEvent>> {
+    pub async fn connect(&mut self) -> Result<mpsc::Receiver<TwitchEvent>> {
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
 
         let tm = self.token_manager.clone();
@@ -94,7 +103,7 @@ impl EventSubClient {
         let client_id = self.client_id.clone();
         let cancel = self.cancel_token.clone();
 
-        tokio::spawn(async move {
+        self.handle = Some(tokio::spawn(async move {
             info!("starting EventSub client lifecycle...");
 
             loop {
@@ -125,9 +134,18 @@ impl EventSubClient {
                     }
                 }
             }
-        });
+        }));
 
         Ok(rx)
+    }
+
+    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+        self.cancel_token.cancel();
+        if let Some(handle) = self.handle.take() {
+            handle.await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -302,6 +320,7 @@ async fn run_eventsub_loop(
 
             _ = cancel_token.cancelled() => {
                 info!("EventSub loop cancelled");
+                let _ = ws.close(None).await;
                 return Ok(());
             }
 

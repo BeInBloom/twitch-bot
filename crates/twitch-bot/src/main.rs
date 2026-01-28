@@ -6,7 +6,9 @@ use core::App;
 use infra::{Config, TwitchFetcher, UnixSignalHandler};
 use std::sync::Arc;
 
-use crate::infra::consumer::{BaseRouter, Consumer, Route, message_handler::MessageHandler};
+use crate::infra::consumer::{
+    BaseRouter, Consumer, Route, command_handler::CommandHandler, message_handler::MessageHandler,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,7 +16,10 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::new();
 
-    let router = BaseRouter::new().route(Route::Message, Arc::new(MessageHandler::new()));
+    let router = BaseRouter::new()
+        .route(Route::Message, Arc::new(MessageHandler::new()))
+        .route(Route::Command, Arc::new(CommandHandler::new()));
+
     let consumer = Consumer::new(router);
 
     let fetcher = TwitchFetcher::new(&config).await?;

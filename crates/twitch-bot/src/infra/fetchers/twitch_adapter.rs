@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use twitch_sdk::{EventSubClient, TokenManager, TwitchEvent, TwitchRole};
 
 use crate::domain::{
@@ -12,8 +13,10 @@ use crate::domain::{
 };
 use crate::infra::Config;
 
+#[non_exhaustive]
 pub struct TwitchFetcher {
-    client: EventSubClient,
+    client: Mutex<EventSubClient>,
+    cancel_token: CancellationToken,
 }
 
 impl TwitchFetcher {
@@ -37,29 +40,38 @@ impl TwitchFetcher {
         ));
         let _bg_handle = token_manager.clone().start_background_loop();
 
-        let client = EventSubClient::new(token_manager, client_id, broadcaster_id)
-            .with_cancel_token(cancel_token);
+        let client = Mutex::new(
+            EventSubClient::new(token_manager, client_id, broadcaster_id)
+                .with_cancel_token(cancel_token.clone()),
+        );
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            cancel_token,
+        })
     }
 
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
-        self.client.cancel_token()
+        self.cancel_token.clone()
     }
 }
 
 #[async_trait]
 impl EventFetcher for TwitchFetcher {
     async fn fetch(&self) -> mpsc::Receiver<Event> {
-        let sdk_rx = self.client.connect().await.expect("SDK connect failed");
+        let sdk_rx = {
+            let mut guard = self.client.lock().await;
+            guard.connect().await.expect("SDK connect failed")
+        };
         let (tx, rx) = mpsc::channel(100);
 
         tokio::spawn(async move {
             let mut sdk_rx = sdk_rx;
             while let Some(twitch_event) = sdk_rx.recv().await {
                 let event = convert_to_domain(twitch_event);
-                if tx.send(event).await.is_err() {
+                if let Err(e) = tx.send(event).await {
+                    debug!("error during data transmission: {}", e);
                     break;
                 }
             }
@@ -80,7 +92,7 @@ fn convert_to_domain(e: TwitchEvent) -> Event {
                 user: convert_user(user),
                 channel,
             },
-            kind: EventKind::ChatMessage { text },
+            kind: text.as_str().into(),
         },
         TwitchEvent::RewardRedemption {
             user,
