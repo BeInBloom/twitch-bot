@@ -54,7 +54,7 @@ impl Default for BaseRouter {
 #[async_trait]
 impl Handler for BaseRouter {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
-        let route = Route::from(&event);
+        let route = (&event).into();
 
         match self.routes.get(&route) {
             Some(handler) => handler.handle(event).await,

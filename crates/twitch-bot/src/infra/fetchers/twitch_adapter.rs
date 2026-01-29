@@ -4,9 +4,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::info;
 use twitch_sdk::{EventSubClient, TokenManager, TwitchEvent, TwitchRole, TwitchUser};
 
+use crate::core::Shutdowner;
 use crate::domain::{
     fetcher::EventFetcher,
     models::{Event, EventContext, EventKind, Platform, Role, User},
@@ -51,15 +52,18 @@ impl TwitchFetcher {
         })
     }
 
-    async fn shutdown(&mut self) -> anyhow::Result<()> {
-        self.cancel_token.cancel();
-        self.client.lock().await.shutdown().await?;
-        Ok(())
-    }
-
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel_token.clone()
+    }
+}
+
+#[async_trait]
+impl Shutdowner for TwitchFetcher {
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        self.cancel_token.cancel();
+        self.client.lock().await.shutdown().await?;
+        Ok(())
     }
 }
 
@@ -72,19 +76,39 @@ impl Drop for TwitchFetcher {
 #[async_trait]
 impl EventFetcher for TwitchFetcher {
     async fn fetch(&self) -> mpsc::Receiver<Event> {
-        let sdk_rx = {
+        let mut sdk_rx = {
             let mut guard = self.client.lock().await;
             guard.connect().await.expect("SDK connect failed")
         };
         let (tx, rx) = mpsc::channel(100);
 
+        let cancellation_token = self.cancel_token.clone();
+
         tokio::spawn(async move {
-            let mut sdk_rx = sdk_rx;
-            while let Some(twitch_event) = sdk_rx.recv().await {
-                let event = twitch_event.into();
-                if let Err(e) = tx.send(event).await {
-                    debug!("error during data transmission: {}", e);
-                    break;
+            loop {
+                tokio::select! {
+                    biased;
+
+                    _ = cancellation_token.cancelled() => {
+                        info!("fetcher cancelled, stopping...");
+                        break
+                    }
+
+                    maybe_event = sdk_rx.recv() => {
+                        match maybe_event {
+                            Some(tw) => {
+                                let event = tw.into();
+                                if tx.send(event).await.is_err() {
+                                    info!("receiver dropped");
+                                    break;
+                                }
+                            }
+                            None => {
+                                info!("sdk channel closed");
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });

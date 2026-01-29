@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::domain::{ShutdownKind, SignalHandler};
+use crate::core::{ShutdownKind, SignalHandler};
 
 pub struct UnixSignalHandler;
 
