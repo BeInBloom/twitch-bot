@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 const PREFIX: &str = "TWITCH_";
 
+#[non_exhaustive]
 pub struct Config {
     kv: HashMap<String, String>,
 }
@@ -22,7 +23,6 @@ impl Config {
         Self::default()
     }
 
-    /// Create Config from a HashMap (useful for testing)
     #[cfg(test)]
     pub fn from_map(kv: HashMap<String, String>) -> Self {
         Self { kv }

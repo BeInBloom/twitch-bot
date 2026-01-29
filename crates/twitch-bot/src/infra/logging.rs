@@ -1,6 +1,7 @@
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[must_use = "LogGuard must be held to keep logging active"]
+#[non_exhaustive]
 pub struct LogGuard {
     _guard: tracing_appender::non_blocking::WorkerGuard,
 }

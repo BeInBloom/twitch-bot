@@ -12,6 +12,9 @@ use crate::{
     infra::consumer::router::traits::Handler,
 };
 
+const BUFFER_SIZE: usize = 30;
+
+#[non_exhaustive]
 pub struct Consumer<R: Handler> {
     router: Arc<R>,
 }
@@ -27,8 +30,6 @@ impl<R: Handler> Consumer<R> {
 #[async_trait]
 impl<R: Handler> EventConsumer for Consumer<R> {
     async fn consume(&self, ch: mpsc::Receiver<Event>) {
-        const BUFFER_SIZE: usize = 30;
-
         ReceiverStream::new(ch)
             .map(|event| {
                 let router = self.router.clone();

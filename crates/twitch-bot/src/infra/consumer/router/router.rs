@@ -27,6 +27,7 @@ impl From<&Event> for Route {
     }
 }
 
+#[non_exhaustive]
 #[derive(Clone)]
 pub struct BaseRouter {
     routes: HashMap<Route, Arc<dyn Handler>>,

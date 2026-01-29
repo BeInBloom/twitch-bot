@@ -14,6 +14,8 @@ use crate::domain::{
 };
 use crate::infra::Config;
 
+const BUFFER_SIZE: usize = 100;
+
 #[non_exhaustive]
 pub struct TwitchFetcher {
     client: Mutex<EventSubClient>,
@@ -80,7 +82,7 @@ impl EventFetcher for TwitchFetcher {
             let mut guard = self.client.lock().await;
             guard.connect().await.expect("SDK connect failed")
         };
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(BUFFER_SIZE);
 
         let cancellation_token = self.cancel_token.clone();
 
