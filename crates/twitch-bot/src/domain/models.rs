@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Platform {
     Twitch,
@@ -86,6 +88,7 @@ impl User {
 pub struct EventContext {
     pub user: User,
     pub channel: Option<String>,
+    pub date: SystemTime,
 }
 
 #[derive(Debug, Clone)]

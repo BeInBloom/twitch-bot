@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -130,6 +131,7 @@ impl From<TwitchEvent> for Event {
                 ctx: EventContext {
                     user: user.into(),
                     channel,
+                    date: SystemTime::now(),
                 },
                 kind: text.as_str().into(),
             },
@@ -143,6 +145,7 @@ impl From<TwitchEvent> for Event {
                 ctx: EventContext {
                     user: user.into(),
                     channel: None,
+                    date: SystemTime::now(),
                 },
                 kind: EventKind::RewardRedemption {
                     reward_id,
@@ -155,6 +158,7 @@ impl From<TwitchEvent> for Event {
                 ctx: EventContext {
                     user: User::system(),
                     channel: None,
+                    date: SystemTime::now(),
                 },
                 kind: EventKind::System {
                     message: "Unknown event type".to_string(),
