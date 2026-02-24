@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use tokio::time::timeout;
 use tracing::{error, info};
@@ -11,6 +11,7 @@ use crate::{
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[non_exhaustive]
 pub struct App<S, F, C> {
     _log_guard: LogGuard,
     signal_handler: S,

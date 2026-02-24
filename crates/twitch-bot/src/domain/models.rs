@@ -7,6 +7,7 @@ pub enum Platform {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Role(u8);
 
 impl Role {

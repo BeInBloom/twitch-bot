@@ -94,7 +94,7 @@ impl EventFetcher for TwitchFetcher {
 
                     _ = cancellation_token.cancelled() => {
                         info!("fetcher cancelled, stopping...");
-                        break
+                        break;
                     }
 
                     maybe_event = sdk_rx.recv() => {
