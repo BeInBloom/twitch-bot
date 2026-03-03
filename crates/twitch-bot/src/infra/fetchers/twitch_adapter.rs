@@ -54,11 +54,6 @@ impl TwitchFetcher {
             cancel_token,
         })
     }
-
-    #[must_use]
-    pub fn cancel_token(&self) -> CancellationToken {
-        self.cancel_token.clone()
-    }
 }
 
 #[async_trait]

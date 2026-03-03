@@ -39,3 +39,15 @@ pub enum AppAuthError {
     #[error("Token manager not initialized")]
     NotInitialized,
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum SenderError {
+    #[error("Create auth failed: {0}")]
+    CreateAuthFailed(#[from] AppAuthError),
+
+    #[error("Failed send message: {0}")]
+    FailedSendMessage(#[from] reqwest::Error),
+
+    #[error("Failed get auth data")]
+    FailedGetAuthData,
+}

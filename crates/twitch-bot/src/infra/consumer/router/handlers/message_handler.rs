@@ -1,27 +1,29 @@
 use async_trait::async_trait;
-use tracing::info;
+use tracing::{error, info};
 
-use crate::{domain::models::Event, infra::consumer::router::traits::Handler};
+use crate::{
+    domain::{models::Event, sender::Sender},
+    infra::consumer::router::traits::Handler,
+};
 
 #[non_exhaustive]
-pub struct MessageHandler;
-
-impl MessageHandler {
-    pub fn new() -> Self {
-        Self {}
-    }
+pub struct MessageHandler<T> {
+    sender: T,
 }
 
-impl Default for MessageHandler {
-    fn default() -> Self {
-        Self::new()
+impl<S: Sender> MessageHandler<S> {
+    pub fn new(sender: S) -> Self {
+        Self { sender }
     }
 }
 
 #[async_trait]
-impl Handler for MessageHandler {
+impl<S: Sender> Handler for MessageHandler<S> {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
         info!("{:?}", event);
+        if let Err(e) = self.sender.send("30627591", "hello world!").await {
+            error!("{}", e);
+        }
         Ok(())
     }
 }

@@ -2,6 +2,7 @@ pub mod config;
 pub mod consumer;
 pub mod fetchers;
 pub mod logging;
+pub mod sender;
 pub mod signal;
 
 pub use config::Config;

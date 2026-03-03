@@ -1,52 +1,35 @@
 use std::{sync::Arc, time::Duration};
 
+use arc_swap::ArcSwap;
 use reqwest::{Client, Response, redirect};
-use serde::Deserialize;
-use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+use crate::chat::models::{
+    CLIENT_TIMEOUT, CONNECTION_TIMEOUT, INTERVAL_BETWEEN_ATTEMPTS, MAX_ATTEMPT, REDIRECT_LIMIT,
+    TWITCH_API_REF, TokenData, TokenResponse,
+};
 use crate::chat::{errors::AppAuthError, traits::Auth};
-
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
-const REREDIRECT_LIMIT: usize = 5;
-const TWITCH_API_REF: &str = "https://id.twitch.tv/oauth2/token";
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    expires_in: u64,
-    token_type: String,
-}
 
 #[non_exhaustive]
 pub struct AuthTwitchSender {
-    client_id: String,
+    client_id: Arc<String>,
     client_secret: String,
-    access_token: RwLock<String>,
-    token_type: RwLock<String>,
+    token_data: ArcSwap<Option<TokenData>>,
     client: Client,
     cancel_token: CancellationToken,
-    expires: Mutex<Duration>,
 }
 
 impl AuthTwitchSender {
-    pub async fn new(client_id: &str, client_secret: &str) -> Result<Arc<Self>, AppAuthError> {
+    pub fn new(client_id: &str, client_secret: &str) -> Result<Arc<Self>, AppAuthError> {
         let req_client = make_request_client();
 
         let sender = Arc::new(Self {
             client: req_client,
-            client_id: String::from(client_id),
+            client_id: Arc::new(String::from(client_id)),
+            token_data: ArcSwap::from_pointee(None),
             client_secret: String::from(client_secret),
-            access_token: RwLock::default(),
-            token_type: RwLock::default(),
             cancel_token: CancellationToken::new(),
-            expires: Mutex::default(),
         });
-
-        sender.refresh_token().await?;
-
-        sender.start_serve();
 
         Ok(sender)
     }
@@ -66,9 +49,7 @@ impl AuthTwitchSender {
     }
 
     async fn set_new_token(&self, token: TokenResponse) {
-        *self.access_token.write().await = token.access_token;
-        *self.token_type.write().await = token.token_type;
-        *self.expires.lock().await = Duration::from_secs(token.expires_in);
+        self.token_data.store(Arc::new(Some(token.into())));
     }
 
     async fn handle_response(&self, response: Response) -> Result<TokenResponse, AppAuthError> {
@@ -145,13 +126,30 @@ impl AuthTwitchSender {
         ]
     }
 
-    fn start_serve(self: &Arc<Self>) {
+    pub fn start_serve(self: &Arc<Self>) {
         let this = self.clone();
         let done = this.cancel_token.clone();
 
         tokio::spawn(async move {
             loop {
-                let wait_duration = *this.expires.lock().await;
+                let wait_duration = {
+                    let guard = this.token_data.load();
+                    match &**guard {
+                        Some(data) => data.expires,
+                        None => Duration::from_secs(0),
+                    }
+                };
+
+                if wait_duration.is_zero() {
+                    //TODO обработать ошибку
+                    let _ = this.refresh_token_with_retry().await;
+                    let token = {
+                        let guard = this.token_data.load();
+                        guard.clone()
+                    };
+                    println!("{:?}", *token);
+                    continue;
+                }
 
                 tokio::select! {
                     biased;
@@ -160,15 +158,25 @@ impl AuthTwitchSender {
                         break;
                     }
 
+                    //TODO исправить эту порнографию
                     _ = tokio::time::sleep(wait_duration) => {
-                        //TODO: добавить ретраи с учетом ошибок
-                        if let Err(_) = this.refresh_token().await {
-                           break;
-                        }
+                        let _ = this.refresh_token_with_retry().await;
                     }
                 }
             }
         });
+    }
+
+    //TODO исправить эту порнографию
+    async fn refresh_token_with_retry(&self) -> Result<(), AppAuthError> {
+        for _ in 0..MAX_ATTEMPT {
+            match self.refresh_token().await {
+                Ok(_) => return Ok(()),
+                _ => tokio::time::sleep(INTERVAL_BETWEEN_ATTEMPTS).await,
+            };
+        }
+
+        Err(AppAuthError::TokenRefreshFailed)
     }
 }
 
@@ -176,7 +184,7 @@ fn make_request_client() -> Client {
     Client::builder()
         .timeout(CLIENT_TIMEOUT)
         .connect_timeout(CONNECTION_TIMEOUT)
-        .redirect(redirect::Policy::limited(REREDIRECT_LIMIT))
+        .redirect(redirect::Policy::limited(REDIRECT_LIMIT))
         .build()
         .unwrap()
 }
@@ -188,11 +196,17 @@ impl Drop for AuthTwitchSender {
 }
 
 impl Auth for AuthTwitchSender {
-    async fn get_access_token(&self) -> String {
-        (*self.access_token.read().await).clone()
+    fn get_access_token(&self) -> Option<Arc<String>> {
+        let guard = self.token_data.load();
+        (**guard).as_ref().map(|data| data.access_token.clone())
     }
 
-    async fn get_token_type(&self) -> String {
-        (*self.token_type.read().await).clone()
+    fn get_token_type(&self) -> Option<Arc<String>> {
+        let guard = self.token_data.load();
+        (**guard).as_ref().map(|data| data.token_type.clone())
+    }
+
+    fn get_client_id(&self) -> Arc<String> {
+        self.client_id.clone()
     }
 }

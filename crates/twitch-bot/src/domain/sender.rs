@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::domain::models::Platform;
 
 #[async_trait]
-pub trait Sender: Send + Sync {
+pub trait Sender: Send + Sync + 'static {
     async fn send(&self, channel_id: &str, message: &str) -> anyhow::Result<()>;
 }
 

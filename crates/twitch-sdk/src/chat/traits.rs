@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 pub(crate) trait Auth {
-    async fn get_access_token(&self) -> String;
-    async fn get_token_type(&self) -> String;
+    fn get_access_token(&self) -> Option<Arc<String>>;
+    fn get_token_type(&self) -> Option<Arc<String>>;
+    fn get_client_id(&self) -> Arc<String>;
 }
