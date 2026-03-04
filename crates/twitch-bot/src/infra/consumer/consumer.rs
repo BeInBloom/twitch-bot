@@ -6,7 +6,7 @@ use tokio::{
     sync::{Semaphore, mpsc},
     time::timeout,
 };
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{
     domain::{consumer::EventConsumer, models::Event},

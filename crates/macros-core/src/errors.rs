@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct WrapperValidationError {
     pub field: String,
