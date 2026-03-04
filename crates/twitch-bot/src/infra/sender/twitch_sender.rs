@@ -2,11 +2,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use twitch_sdk::chat::sender::HelixSender;
 
-use crate::{domain::sender::Sender, infra::Config};
-
-const TWITCH_WRITER_ID: &str = "TWITCH_WRITER_ID";
-const TWITCH_CLIENT_ID: &str = "TWITCH_CLIENT_ID";
-const TWITCH_CLIENT_SECRET: &str = "TWITCH_CLIENT_SECRET";
+use crate::{domain::sender::Sender, infra::config::models::TwitchAuth};
 
 #[non_exhaustive]
 pub struct TwitchSender {
@@ -14,10 +10,10 @@ pub struct TwitchSender {
 }
 
 impl TwitchSender {
-    pub fn new(config: &Config) -> anyhow::Result<Self> {
-        let writer_id = config.require(TWITCH_WRITER_ID)?;
-        let client_id = config.require(TWITCH_CLIENT_ID)?;
-        let client_secret = config.require(TWITCH_CLIENT_SECRET)?;
+    pub fn new(config: &TwitchAuth) -> anyhow::Result<Self> {
+        let writer_id = config.writer_id.as_str();
+        let client_id = config.client_id.as_str();
+        let client_secret = config.client_secret.as_str();
 
         let sender = HelixSender::new(writer_id, client_id, client_secret)?;
         Ok(Self { sender })

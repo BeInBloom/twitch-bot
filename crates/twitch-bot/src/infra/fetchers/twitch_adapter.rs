@@ -13,7 +13,7 @@ use crate::domain::{
     fetcher::EventFetcher,
     models::{Event, EventContext, EventKind, Platform, Role, User},
 };
-use crate::infra::Config;
+use crate::infra::config::models::TwitchAuth;
 
 const BUFFER_SIZE: usize = 100;
 
@@ -24,18 +24,18 @@ pub struct TwitchFetcher {
 }
 
 impl TwitchFetcher {
-    pub async fn new(config: &Config) -> Result<Self> {
+    pub async fn new(config: &TwitchAuth) -> Result<Self> {
         Self::with_cancel_token(config, CancellationToken::new()).await
     }
 
     pub async fn with_cancel_token(
-        config: &Config,
+        config: &TwitchAuth,
         cancel_token: CancellationToken,
     ) -> Result<Self> {
-        let client_id = config.require("TWITCH_CLIENT_ID")?.to_string();
-        let client_secret = config.require("TWITCH_CLIENT_SECRET")?.to_string();
-        let refresh_token = config.require("TWITCH_REFRESH_TOKEN")?.to_string();
-        let broadcaster_id = config.require("TWITCH_BROADCASTER_ID")?.to_string();
+        let client_id = config.client_id.as_str().to_string();
+        let client_secret = config.client_secret.as_str().to_string();
+        let refresh_token = config.refresh_token.as_str().to_string();
+        let broadcaster_id = config.broadcaster_id.as_str().to_string();
 
         let token_manager = Arc::new(TokenManager::new(
             client_id.clone(),

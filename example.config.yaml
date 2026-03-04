@@ -1,0 +1,17 @@
+environment:
+  env: "development" # значения: "development", "production", "staging"
+twitch:
+  auth:
+    broadcaster_id: "..."
+    client_id: "..."
+    client_secret: "..."
+    access_token: "..."
+    refresh_token: "..."
+    writer_id: "..."
+  bot:
+    nick: "..."
+    channels:
+      - "channel1"
+      - "channel2"
+    broadcaster_id: "..."
+    writer_id: "..."
