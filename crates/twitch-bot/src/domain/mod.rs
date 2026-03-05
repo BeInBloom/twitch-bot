@@ -1,3 +1,4 @@
+pub mod command_executor;
 pub mod consumer;
 pub mod errors;
 pub mod fetcher;

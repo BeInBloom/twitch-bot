@@ -24,14 +24,11 @@ pub struct TwitchFetcher {
 }
 
 impl TwitchFetcher {
-    pub async fn new(config: &TwitchAuth) -> Result<Self> {
-        Self::with_cancel_token(config, CancellationToken::new()).await
+    pub fn new(config: &TwitchAuth) -> Result<Self> {
+        Self::with_cancel_token(config, CancellationToken::new())
     }
 
-    pub async fn with_cancel_token(
-        config: &TwitchAuth,
-        cancel_token: CancellationToken,
-    ) -> Result<Self> {
+    pub fn with_cancel_token(config: &TwitchAuth, cancel_token: CancellationToken) -> Result<Self> {
         let client_id = config.client_id.as_str().to_string();
         let client_secret = config.client_secret.as_str().to_string();
         let refresh_token = config.refresh_token.as_str().to_string();

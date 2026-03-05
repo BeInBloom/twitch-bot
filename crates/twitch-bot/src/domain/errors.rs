@@ -19,3 +19,18 @@ impl From<WrapperValidationError> for ConfigError {
         }
     }
 }
+
+#[derive(Debug, Error)]
+pub enum ParseTrackError {
+    #[error("missing title")]
+    MissingTitle,
+
+    #[error("missing album")]
+    MissingAlbum,
+
+    #[error("missing artist")]
+    MissingArtist,
+
+    #[error("missing url")]
+    MissingUrl,
+}

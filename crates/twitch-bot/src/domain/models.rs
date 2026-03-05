@@ -8,6 +8,14 @@ pub enum Platform {
     Console,
 }
 
+pub struct CommandResult(pub String);
+
+impl AsRef<String> for CommandResult {
+    fn as_ref(&self) -> &String {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct Role(u8);
