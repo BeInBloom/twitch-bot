@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
-pub enum AppAuthError {
+pub enum ClientCredentialsAuthError {
     #[error("client_id cannot be empty")]
     EmptyClientId,
 
@@ -43,7 +43,7 @@ pub enum AppAuthError {
 #[derive(Debug, thiserror::Error)]
 pub enum SenderError {
     #[error("Create auth failed: {0}")]
-    CreateAuthFailed(#[from] AppAuthError),
+    CreateAuthFailed(#[from] ClientCredentialsAuthError),
 
     #[error("Failed send message: {0}")]
     FailedSendMessage(#[from] reqwest::Error),

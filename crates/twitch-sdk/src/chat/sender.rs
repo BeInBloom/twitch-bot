@@ -3,17 +3,16 @@ use std::sync::Arc;
 use reqwest::{Client, redirect};
 use serde_json::json;
 
-use crate::chat::{
-    auth::AuthTwitchSender,
+use super::{
+    client_credentials_auth::ClientCredentialsAuth,
     errors::SenderError,
-    models::{AuthData, CLIENT_TIMEOUT, CONNECTION_TIMEOUT, REDIRECT_LIMIT, TWITCH_HELIX_URL},
-    traits::Auth,
+    helix_types::{AuthData, CLIENT_TIMEOUT, CONNECTION_TIMEOUT, REDIRECT_LIMIT, TWITCH_HELIX_URL},
 };
 
 #[non_exhaustive]
 pub struct HelixSender {
     writer_id: String,
-    auth: Arc<AuthTwitchSender>,
+    auth: Arc<ClientCredentialsAuth>,
     client: Client,
 }
 
@@ -21,8 +20,8 @@ impl HelixSender {
     pub fn new(writer_id: &str, client_id: &str, client_secret: &str) -> Result<Self, SenderError> {
         let writer_id = String::from(writer_id);
         let client = build_request_client()?;
-        let auth = AuthTwitchSender::new(client_id, client_secret)?;
-        auth.start_serve();
+        let auth = ClientCredentialsAuth::new(client_id, client_secret)?;
+        auth.start_background_refresh();
 
         Ok(Self {
             auth,
@@ -33,7 +32,7 @@ impl HelixSender {
 
     pub async fn send(&self, channel: &str, message: &str) -> Result<(), SenderError> {
         let auth_data = self.get_auth_data()?;
-        let token = format!("{} {}", "Bearer", auth_data.token);
+        let token = format!("{} {}", auth_data.token_type.as_ref(), auth_data.token.as_ref());
 
         self.client
             .post(TWITCH_HELIX_URL)
@@ -51,17 +50,15 @@ impl HelixSender {
     }
 
     fn get_auth_data(&self) -> Result<AuthData, SenderError> {
-        Ok(AuthData {
-            client_id: self.auth.get_client_id().clone(),
-            token_type: self
-                .auth
-                .get_token_type()
-                .ok_or_else(|| SenderError::FailedGetAuthData)?,
-            token: self
-                .auth
-                .get_access_token()
-                .ok_or_else(|| SenderError::FailedGetAuthData)?,
-        })
+        self.auth
+            .auth_data()
+            .ok_or_else(|| SenderError::FailedGetAuthData)
+    }
+}
+
+impl Drop for HelixSender {
+    fn drop(&mut self) {
+        self.auth.shutdown();
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::types::{TwitchEvent, TwitchRole, TwitchUser};
+use crate::model::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
 
 pub fn parse_irc_messages(raw: &str) -> Vec<TwitchEvent> {
     raw.split('\n')
@@ -63,7 +63,10 @@ fn parse_privmsg(tags: &str, params: &str) -> Option<TwitchEvent> {
             display_name: meta.display_name.to_string(),
             role: meta.role,
         },
-        channel,
+        target: TwitchChatTarget {
+            broadcaster_id: None,
+            channel_login: channel,
+        },
         text,
     })
 }
@@ -380,8 +383,8 @@ mod tests {
         let raw = "@user-id=1;display-name=Test :t PRIVMSG #mychannel :hello";
         let event = parse_one(raw);
         match event {
-            TwitchEvent::ChatMessage { channel, .. } => {
-                assert_eq!(channel, Some("mychannel".to_string()));
+            TwitchEvent::ChatMessage { target, .. } => {
+                assert_eq!(target.channel_login, Some("mychannel".to_string()));
             }
             _ => panic!("Expected ChatMessage"),
         }

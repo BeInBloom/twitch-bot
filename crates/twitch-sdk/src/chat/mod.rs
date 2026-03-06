@@ -1,5 +1,4 @@
-pub mod auth;
+mod client_credentials_auth;
 pub mod errors;
-pub mod models;
+pub mod helix_types;
 pub mod sender;
-pub mod traits;

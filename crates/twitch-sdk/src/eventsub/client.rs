@@ -13,12 +13,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-use super::types::{
+use super::protocol::{
     ChatBadge, ChatMessageEvent, EventSubMessage, NotificationPayload, RewardRedemptionEvent,
     Session, SessionPayload,
 };
 use crate::auth::TokenManager;
-use crate::types::{TwitchEvent, TwitchRole, TwitchUser};
+use crate::model::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
 const EVENTSUB_WS_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const EVENTSUB_API_URL: &str = "https://api.twitch.tv/helix/eventsub/subscriptions";
 const CHANNEL_BUFFER_SIZE: usize = 100;
@@ -439,7 +439,10 @@ async fn handle_notification(
                     display_name: chat_msg.chatter_user_name,
                     role,
                 },
-                channel: Some(chat_msg.broadcaster_user_login),
+                target: TwitchChatTarget {
+                    broadcaster_id: Some(chat_msg.broadcaster_user_id),
+                    channel_login: Some(chat_msg.broadcaster_user_login),
+                },
                 text: chat_msg.message.text,
             };
 

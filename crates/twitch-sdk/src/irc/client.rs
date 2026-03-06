@@ -12,7 +12,7 @@ use url::Url;
 
 use super::parser::parse_irc_messages;
 use crate::auth::TokenManager;
-use crate::types::TwitchEvent;
+use crate::model::TwitchEvent;
 
 const TWITCH_WS_URL: &str = "wss://irc-ws.chat.twitch.tv:443";
 const CHANNEL_BUFFER_SIZE: usize = 100;

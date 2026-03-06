@@ -1,4 +1,4 @@
 mod client;
-mod types;
+mod protocol;
 
 pub use client::EventSubClient;
