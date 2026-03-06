@@ -7,14 +7,13 @@ use crate::{
     domain::{
         command_executor::CommandExecutor,
         errors::ParseTrackError,
-        models::{CommandResult, Event, EventKind},
+        models::{CommandResult, Event, EventKind, ExecuteCommand},
         sender::Sender,
     },
     infra::consumer::router::traits::Handler,
 };
 
 const MUSIC: &str = "music";
-const MUSIC_COMMAND: &str = "playerctl metadata";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Command {
@@ -103,24 +102,18 @@ impl TryFrom<CommandResult> for MusicCommandResult {
     type Error = ParseTrackError;
 
     fn try_from(value: CommandResult) -> Result<Self, Self::Error> {
-        let mut iter = value
-            .as_ref()
-            .lines()
-            .map(|line| line.split_whitespace().nth(2).unwrap_or(""));
+        let mut parts = value.as_ref().splitn(5, ';');
 
-        let _ = iter.next();
-
-        let title = iter.next().ok_or(ParseTrackError::MissingTitle)?;
-        let album = iter.next().ok_or(ParseTrackError::MissingAlbum)?;
-        let artist = iter.next().ok_or(ParseTrackError::MissingArtist)?;
-        let _ = iter.next();
-        let url = iter.next().ok_or(ParseTrackError::MissingUrl)?;
+        let artist = parts.next().ok_or(ParseTrackError::FailedParsData)?;
+        let title = parts.next().ok_or(ParseTrackError::FailedParsData)?;
+        let album = parts.next().ok_or(ParseTrackError::FailedParsData)?;
+        let url = parts.next().ok_or(ParseTrackError::FailedParsData)?;
 
         Ok(Self {
-            artist: artist.to_string(),
-            album: Some(album.to_string()),
-            title: title.to_string(),
-            url: Some(url.to_string()),
+            artist: artist.to_owned(),
+            title: title.to_owned(),
+            album: (!album.is_empty()).then(|| album.to_owned()),
+            url: (!url.is_empty()).then(|| url.to_owned()),
         })
     }
 }
@@ -147,12 +140,18 @@ where
     C: CommandExecutor,
 {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
-        info!("in music handler!");
-        let result = self.command_executor.execute(MUSIC_COMMAND).await?;
+        let cmd = ExecuteCommand::new(
+            "playerctl",
+            [
+                "metadata",
+                "--format",
+                "{{ artist }};{{ title }};{{ album }};{{ url }};",
+            ],
+        );
+
+        let result = self.command_executor.execute(cmd).await?;
         let result: MusicCommandResult = result.try_into()?;
         let result: TrackResponse = result.into();
-        info!("command res: {:?}", result.0);
-        // let channel_id = &event.ctx.channel.ok_or(anyhow::anyhow!("канала нет?"))?;
         self.sender.send("30627591", &result.0).await
     }
 }

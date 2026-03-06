@@ -1,7 +1,12 @@
-use crate::domain::{command_executor::CommandExecutor, models::CommandResult};
+use crate::domain::{
+    command_executor::CommandExecutor,
+    models::{CommandResult, ExecuteCommand},
+};
 use anyhow::Context;
 use async_trait::async_trait;
+use shlex::split;
 use tokio::process::Command;
+use tracing::info;
 
 pub struct CliCommandExecutor;
 impl CliCommandExecutor {
@@ -16,18 +21,9 @@ impl Default for CliCommandExecutor {
 }
 #[async_trait]
 impl CommandExecutor for CliCommandExecutor {
-    async fn execute(&self, command: &str) -> anyhow::Result<CommandResult> {
-        let parts: Vec<&str> = command.split_whitespace().collect();
-
-        if parts.is_empty() {
-            return Err(anyhow::anyhow!("Empty command"));
-        }
-
-        let cmd = parts[0];
-        let args = &parts[1..];
-
-        let output = Command::new(cmd)
-            .args(args)
+    async fn execute(&self, cmd: ExecuteCommand) -> anyhow::Result<CommandResult> {
+        let output = Command::new(cmd.program)
+            .args(cmd.args)
             .output()
             .await
             .context("Failed to execute command")?;

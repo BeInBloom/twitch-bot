@@ -163,3 +163,20 @@ impl Event {
         self.ctx.user.role.contains(required)
     }
 }
+
+pub(crate) struct ExecuteCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl ExecuteCommand {
+    pub fn new(
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+}

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::models::CommandResult;
+use crate::domain::models::{CommandResult, ExecuteCommand};
 
 #[async_trait]
 pub(crate) trait CommandExecutor: Send + Sync + 'static {
-    async fn execute(&self, command: &str) -> anyhow::Result<CommandResult>;
+    async fn execute(&self, cmd: ExecuteCommand) -> anyhow::Result<CommandResult>;
 }

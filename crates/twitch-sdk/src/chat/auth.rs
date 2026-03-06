@@ -143,11 +143,6 @@ impl AuthTwitchSender {
                 if wait_duration.is_zero() {
                     //TODO обработать ошибку
                     let _ = this.refresh_token_with_retry().await;
-                    let token = {
-                        let guard = this.token_data.load();
-                        guard.clone()
-                    };
-                    println!("{:?}", *token);
                     continue;
                 }
 
