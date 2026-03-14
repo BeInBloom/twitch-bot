@@ -1,5 +1,7 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use std::sync::Arc;
+use twitch_sdk::TokenManager;
 use twitch_sdk::chat::sender::HelixSender;
 
 use crate::{app::ports::MessageSink, config::model::TwitchAuth, model::ChatTarget};
@@ -10,12 +12,11 @@ pub struct TwitchChatSink {
 }
 
 impl TwitchChatSink {
-    pub fn new(config: &TwitchAuth) -> anyhow::Result<Self> {
+    pub fn new(config: &TwitchAuth, token_manager: Arc<TokenManager>) -> anyhow::Result<Self> {
         let writer_id = config.writer_id.as_str();
         let client_id = config.client_id.as_str();
-        let client_secret = config.client_secret.as_str();
 
-        let sender = HelixSender::new(writer_id, client_id, client_secret)?;
+        let sender = HelixSender::new(writer_id, client_id, token_manager)?;
         Ok(Self { sender })
     }
 }

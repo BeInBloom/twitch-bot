@@ -5,10 +5,7 @@ pub struct ChatTarget {
 }
 
 impl ChatTarget {
-    pub fn new(
-        broadcaster_id: impl Into<String>,
-        channel_login: impl Into<String>,
-    ) -> Self {
+    pub fn new(broadcaster_id: impl Into<String>, channel_login: impl Into<String>) -> Self {
         Self {
             broadcaster_id: broadcaster_id.into(),
             channel_login: channel_login.into(),

@@ -47,6 +47,7 @@ pub struct EventSubClient {
     token_manager: Arc<TokenManager>,
     client: Client,
     broadcaster_id: String,
+    bot_user_id: String,
     client_id: String,
     cancel_token: CancellationToken,
     handle: Option<JoinHandle<()>>,
@@ -57,6 +58,7 @@ struct EventSubLifecycleParams {
     token_manager: Arc<TokenManager>,
     client: Client,
     broadcaster_id: String,
+    bot_user_id: String,
     client_id: String,
     cancel_token: CancellationToken,
 }
@@ -73,11 +75,13 @@ impl EventSubClient {
         token_manager: Arc<TokenManager>,
         client_id: String,
         broadcaster_id: String,
+        bot_user_id: String,
     ) -> Self {
         Self {
             token_manager,
             client: Client::new(),
             broadcaster_id,
+            bot_user_id,
             client_id,
             cancel_token: CancellationToken::new(),
             handle: None,
@@ -101,6 +105,7 @@ impl EventSubClient {
         let tm = self.token_manager.clone();
         let client = self.client.clone();
         let broadcaster_id = self.broadcaster_id.clone();
+        let bot_user_id = self.bot_user_id.clone();
         let client_id = self.client_id.clone();
         let cancel = self.cancel_token.clone();
 
@@ -121,6 +126,7 @@ impl EventSubClient {
                         token_manager: tm.clone(),
                         client: client.clone(),
                         broadcaster_id: broadcaster_id.clone(),
+                        bot_user_id: bot_user_id.clone(),
                         client_id: client_id.clone(),
                         cancel_token: cancel.clone(),
                     }) => {
@@ -156,6 +162,7 @@ async fn run_lifecycle(params: EventSubLifecycleParams) -> Result<()> {
         token_manager,
         client,
         broadcaster_id,
+        bot_user_id,
         client_id,
         cancel_token,
     } = params;
@@ -173,7 +180,15 @@ async fn run_lifecycle(params: EventSubLifecycleParams) -> Result<()> {
     let api_token = token.strip_prefix("oauth:").unwrap_or(&token);
 
     subscribe_to_rewards(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
-    subscribe_to_chat(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
+    subscribe_to_chat(
+        &client,
+        &client_id,
+        api_token,
+        &broadcaster_id,
+        &bot_user_id,
+        &session.id,
+    )
+    .await?;
 
     let keepalive_timeout =
         Duration::from_secs(session.keepalive_timeout_seconds + KEEPALIVE_TIMEOUT_BUFFER_SECS);
@@ -274,6 +289,7 @@ async fn subscribe_to_chat(
     client_id: &str,
     access_token: &str,
     broadcaster_id: &str,
+    bot_user_id: &str,
     session_id: &str,
 ) -> Result<()> {
     let request = SubscriptionRequest {
@@ -281,7 +297,7 @@ async fn subscribe_to_chat(
         version: "1".to_string(),
         condition: serde_json::json!({
             "broadcaster_user_id": broadcaster_id,
-            "user_id": broadcaster_id
+            "user_id": bot_user_id
         }),
         transport: Transport {
             method: "websocket".to_string(),
@@ -304,8 +320,11 @@ async fn subscribe_to_chat(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        warn!("Failed to subscribe to chat: {} - {}", status, body);
-        Ok(())
+        Err(anyhow::anyhow!(
+            "Failed to subscribe to chat: {} - {}",
+            status,
+            body
+        ))
     }
 }
 

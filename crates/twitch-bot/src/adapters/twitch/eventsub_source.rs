@@ -8,10 +8,7 @@ use tracing::info;
 use twitch_sdk::{EventSubClient, TokenManager};
 
 use crate::{
-    app::ports::EventSource,
-    config::model::TwitchAuth,
-    model::Event,
-    runtime::Shutdowner,
+    app::ports::EventSource, config::model::TwitchAuth, model::Event, runtime::Shutdowner,
 };
 
 use super::mapper::map_event;
@@ -25,25 +22,21 @@ pub struct TwitchEventSubSource {
 }
 
 impl TwitchEventSubSource {
-    pub fn new(config: &TwitchAuth) -> Result<Self> {
-        Self::with_cancel_token(config, CancellationToken::new())
+    pub fn new(config: &TwitchAuth, token_manager: Arc<TokenManager>) -> Result<Self> {
+        Self::with_cancel_token(config, token_manager, CancellationToken::new())
     }
 
-    pub fn with_cancel_token(config: &TwitchAuth, cancel_token: CancellationToken) -> Result<Self> {
+    pub fn with_cancel_token(
+        config: &TwitchAuth,
+        token_manager: Arc<TokenManager>,
+        cancel_token: CancellationToken,
+    ) -> Result<Self> {
         let client_id = config.client_id.as_str().to_string();
-        let client_secret = config.client_secret.as_str().to_string();
-        let refresh_token = config.refresh_token.as_str().to_string();
         let broadcaster_id = config.broadcaster_id.as_str().to_string();
-
-        let token_manager = Arc::new(TokenManager::new(
-            client_id.clone(),
-            client_secret,
-            refresh_token,
-        ));
-        let _bg_handle = token_manager.clone().start_background_loop();
+        let bot_user_id = config.writer_id.as_str().to_string();
 
         let client = Mutex::new(
-            EventSubClient::new(token_manager, client_id, broadcaster_id)
+            EventSubClient::new(token_manager, client_id, broadcaster_id, bot_user_id)
                 .with_cancel_token(cancel_token.clone()),
         );
 

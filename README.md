@@ -1,480 +1,297 @@
 # Twitch Bot
 
-![Rust](https://img.shields.io/badge/Rust-1.93.1-orange.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Architecture](https://img.shields.io/badge/architecture-DDD-green.svg)
+Twitch bot workspace in Rust with a small staged event pipeline:
 
-Модерный Twitch бот на Rust с чистой архитектурой и поддержкой EventSub API.
+- Twitch EventSub is the input source
+- incoming SDK events are mapped into domain `Event`
+- `Event` is projected into typed requests (`ChatRequest`, `CommandRequest`, `RewardRequest`, `SystemRequest`)
+- routers dispatch by stage
+- handlers execute bot behavior
 
----
+The current executable lives in `crates/twitch-bot`. The workspace also contains a small Twitch SDK and config helper macros.
 
-## 📋 О проекте
+## Current behavior
 
-Это Twitch бот, построенный с использованием Domain-Driven Design (DDD) и принципов чистой архитектуры. Проект разработан с акцентом на расширяемость, безопасность типов и надежность.
+What the bot actually does today:
 
-**Ключевые особенности:**
+- consumes Twitch EventSub events through `twitch-sdk`
+- supports two domain event kinds in the main pipeline:
+  - chat messages
+  - channel point reward redemptions
+- converts unsupported SDK events and chat messages without a complete target into `System` events
+- routes chat messages into:
+  - plain messages
+  - commands
+- supports two registered commands:
+  - `!music`
+  - `!skip`
+- logs and ignores unknown commands
+- logs reward redemptions through a fallback reward handler
+- logs plain chat messages at `trace`
+- logs system/fallback events at `warn`
 
-- 🎯 EventSub/WebSocket интеграция для работы в реальном времени
-- 🏗️ Чистая архитектура с четким разделением слоев
-- 🔒 Типизированная конфигурация с автоматической валидацией
-- 🛡️ Graceful shutdown с CancellationToken
-- 📦 Модульная система роутинга событий
-- 🔄 Автоматическое обновление OAuth токенов
-- ⚡ Высокая производительность на async/await
+Command behavior:
 
----
+- `!music` calls `playerctl metadata` and sends `сейчас играет трек <artist> - <title>` to chat
+- `!skip` calls `playerctl next` and sends `переключил трек` to chat
 
-## 🏗️ Архитектура проекта
+## Workspace layout
 
-### Общая схема
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    APPLICATION ENTRY                    │
-│                      (main.rs)                          │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│                   CORE LAYER                            │
-│              (Оркестрация приложения)                   │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐       │
-│  │    App   │  │ Shutdown │  │  SignalHandler   │       │
-│  └──────────┘  └──────────┘  └──────────────────┘       │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│                 DOMAIN LAYER                            │
-│             (Бизнес-логика и модели)                    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐       │
-│  │  Models  │  │  Traits  │  │   Errors         │       │
-│  │ (Event,  │  │(Fetcher, │  │ (ConfigError)    │       │
-│  │  User)   │  │Consumer) │  │                  │       │
-│  └──────────┘  └──────────┘  └──────────────────┘       │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│               INFRASTRUCTURE LAYER                      │
-│          (Реализация внешних зависимостей)              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐       │
-│  │ Config   │  │  Router  │  │   Sender         │       │
-│  │ (Loader, │  │ (Handler │  │ (TwitchSender)   │       │
-│  │  Models) │  │  chain)  │  │                  │       │
-│  └──────────┘  └──────────┘  └──────────────────┘       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐       │
-│  │ Fetcher  │  │ Consumer │  │   Logging        │       │
-│  │(Twitch)  │  │ (Buffer  │  │                  │       │
-│  │          │  │ control) │  │                  │       │
-│  └──────────┘  └──────────┘  └──────────────────┘       │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│               EXTERNAL DEPENDENCIES                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐       │
-│  │ Twitch   │  │   YAML   │  │   File System    │       │
-│  │   API    │  │  Config  │  │                  │       │
-│  └──────────┘  └──────────┘  └──────────────────┘       │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Описание слоев
-
-#### 🎯 Core Layer (`src/core/`)
-
-**Отвечает за оркестрацию приложения**
-
-Компоненты:
-
-- **App** - главный оркестратор, объединяет fetcher, consumer и signal handler
-- **Shutdowner** - трейт для graceful shutdown
-- **SignalHandler** - обработка системных сигналов (SIGINT, SIGTERM)
-
-Ключевой принцип: Core слой знает "когда" делать, но не "что" делать.
-
-#### 🧠 Domain Layer (`src/domain/`)
-
-**Содержит бизнес-логику и не зависит от внешних систем**
-
-Компоненты:
-
-- **Models** - доменные модели (`Event`, `User`, `Role`, `Platform`)
-- **Traits** - абстракции для внешних зависимостей:
-  - `EventFetcher` - интерфейс для получения событий
-  - `EventConsumer` - интерфейс для обработки событий
-  - `Sender` - интерфейс для отправки сообщений
-- **Errors** - специфичные ошибки домена
-
-Ключевой принцип: Domain слой полностью независим от инфраструктуры.
-
-#### 🔧 Infrastructure Layer (`src/infra/`)
-
-**Реализует интерфейсы домена и работает с внешними системами**
-
-Компоненты:
-
-- **Config** - загрузка и валидация конфигурации из YAML
-- **Router** - маршрутизация событий по типам (Message, Command, etc.)
-- **Fetcher** - реализация `EventFetcher` (Twitch EventSub)
-- **Consumer** - реализация `EventConsumer` с backpressure control
-- **Sender** - реализация `Sender` (Twitch Helix API)
-- **Logging** - настройка tracing
-
-Ключевой принцип: Infra слой реализует интерфейсы, определенные в Domain.
-
----
-
-## 📦 Структура крейтов
-
-```
+```text
 crates/
-├── macros/              # Proc-macro для #[derive(WrapperType)]
-│   └── src/lib.rs      # Генерация TryFrom, Deserialize, as_str()
-├── macros-core/         # Общие типы для макросов
-│   └── src/
-│       ├── lib.rs       # Re-export WrapperValidationError
-│       └── errors.rs    # Тип ошибки валидации
-├── twitch-sdk/         # SDK для Twitch API
-│   └── src/
-│       ├── auth.rs      # TokenManager для OAuth
-│       ├── chat/        # IRC клиент и Helix Sender
-│       ├── eventsub/    # EventSub WebSocket клиент
-│       ├── irc/         # IRC парсер и клиент
-│       └── types.rs     # TwitchEvent, TwitchUser, TwitchRole
-└── twitch-bot/         # Основное приложение
-    └── src/
-        ├── core/        # Оркестрация, shutdown, сигналы
-        ├── domain/      # Модели, трейты, ошибки
-        └── infra/       # Конфигурация, router, fetcher, sender
+├── macros/         # proc-macro helpers used by config wrapper types
+├── macros-core/    # shared error types for macros
+├── twitch-bot/     # application crate
+└── twitch-sdk/     # Twitch EventSub/chat/auth SDK
 ```
 
-### Twitch SDK
+Important application modules:
 
-Отдельный крейт, который можно использовать независимо:
-
-- **EventSubClient** - WebSocket клиент для Twitch событий
-- **IrcClient** - IRC клиент для чата (опционально)
-- **TokenManager** - автоматическое обновление токенов
-- Типы: `TwitchEvent`, `TwitchUser`, `TwitchRole`
-
----
-
-## 🚀 Быстрый старт
-
-### 1. Клонирование
-
-```bash
-git clone <repo-url>
-cd twitch-bot
+```text
+crates/twitch-bot/src/
+├── adapters/       # Twitch + system integrations
+├── app/
+│   ├── command/    # command parsing and typed command names
+│   ├── dispatch/   # handlers, interceptors, routers, typed requests
+│   ├── handlers/   # leaf handlers
+│   └── ports/      # application-facing interfaces
+├── config/         # YAML config loading and wrapper-based validation
+├── model/          # domain events and supporting types
+├── runtime/        # consumer, logging, shutdown, supervisor
+├── bootstrap.rs    # composition root
+└── main.rs         # process entrypoint
 ```
 
-### 2. Настройка конфигурации
+## Architecture
 
-Скопируйте пример конфигурации:
+The current codebase is not organized as `core/domain/infra` directories anymore. It is organized around the runtime pipeline and application stages.
+
+High-level flow:
+
+```text
+main
+  -> bootstrap::run
+  -> ConfigLoader::load
+  -> TokenManager background refresh loop
+  -> adapters + routers + handlers wiring
+  -> Supervisor::run
+  -> EventSource::fetch
+  -> Consumer<Event>::consume
+  -> EventRouter<Event>
+       -> project_chat -> ChatRouter<ChatRequest>
+            -> CommandRouter<CommandRequest>
+       -> project_reward -> RewardRouter<RewardRequest>
+       -> project_system -> SystemHandler
+```
+
+The staged dispatch tree is documented visually in:
+
+- `docs/architecture/event-pipeline.png`
+- `docs/architecture/event-pipeline.svg`
+- `docs/architecture/event-pipeline.mmd`
+
+### Runtime details
+
+The runtime behavior currently implemented in code:
+
+- `Consumer` processes up to `30` events concurrently
+- each event handler execution has a `1s` timeout
+- graceful shutdown waits up to `10s`
+- shutdown is triggered by `SIGINT`, `SIGTERM`, or `SIGHUP`
+- logging is initialized through `tracing`
+
+### Routers and typed requests
+
+The dispatch layer uses typed requests per stage:
+
+- `EventRouter<Event>`
+- `ChatRouter<ChatRequest>`
+- `CommandRouter<CommandRequest>`
+- `RewardRouter<RewardRequest>`
+
+The design split is:
+
+- `Router` chooses a branch
+- `Projector` converts a broad input into a narrower request
+- `Handler` performs business behavior
+- `Interceptor` wraps a handler before and/or after execution
+
+In the current codebase:
+
+- `app/dispatch/projector.rs` handles `Event -> ChatRequest | RewardRequest | SystemRequest`
+- chat-stage narrowing is completed through `TryFrom<ChatRequest>` into `PlainMessageRequest` or `CommandRequest`
+- interceptors are supported by the builders, but no concrete interceptors are wired in `bootstrap` yet
+
+### Dynamic route registration
+
+Two route spaces are intentionally runtime-driven:
+
+- commands are registered by `CommandName`
+- reward handlers are registered by `RewardId`
+
+That means commands and rewards are not modeled as closed enums.
+
+Current command registration happens in `bootstrap.rs` through:
+
+```rust
+CommandRouter::builder()
+    .route("music", Arc::new(MusicHandler::new(...)))
+    .route("skip", Arc::new(SkipHandler::new(...)))
+    .fallback(Arc::new(UnknownCommandHandler::new()))
+    .build()?;
+```
+
+Reward routing follows the same model:
+
+```rust
+RewardRouter::builder()
+    .route("reward-id", Arc::new(MyRewardHandler))
+    .fallback(Arc::new(RewardRedemptionHandler::new()))
+    .build()?;
+```
+
+## Event model
+
+The application-level domain event enum is:
+
+- `Event::ChatMessage`
+- `Event::RewardRedemption`
+- `Event::System`
+
+The current `twitch-sdk` event model feeding the bot is narrower and only emits:
+
+- `TwitchEvent::ChatMessage`
+- `TwitchEvent::RewardRedemption`
+
+Anything unsupported or impossible to map cleanly, including chat events without a complete target, is converted into `Event::System`.
+
+## Configuration
+
+The bot expects `./config.yaml`.
+
+Example:
+
+```yaml
+environment:
+  env: "development"
+
+twitch:
+  auth:
+    broadcaster_id: "..."
+    client_id: "..."
+    client_secret: "..."
+    access_token: "..."
+    refresh_token: "..."
+    writer_id: "..."
+  bot:
+    nick: "..."
+    channels:
+      - "channel1"
+      - "channel2"
+    broadcaster_id: "..."
+    writer_id: "..."
+```
+
+### What is actually used today
+
+The current bootstrap path actively uses:
+
+- `twitch.auth.client_id`
+- `twitch.auth.client_secret`
+- `twitch.auth.refresh_token`
+- `twitch.auth.broadcaster_id`
+- `twitch.auth.writer_id`
+
+Important nuance:
+
+- `access_token` exists in the config model, but the current runtime path initializes `TokenManager` from `refresh_token` and refreshes tokens on startup/background loop
+- `twitch.bot.*` is currently deserialized, but not used by `bootstrap.rs`
+
+So the schema is a bit ahead of the wiring.
+
+### Validation
+
+Config types use `#[derive(WrapperType)]` wrappers, which gives:
+
+- strongly typed config fields
+- string-level validation from the wrapper type
+- YAML deserialization into typed wrappers
+
+Current limitation:
+
+- `config::validate::validate` is still a pass-through function
+- so cross-field validation and collection-level validation are not implemented yet
+
+## Running
+
+Requirements:
+
+- recent stable Rust with Edition 2024 support
+- `playerctl` installed and available in `PATH`
+- Unix-like OS
+- valid Twitch app credentials and refresh token
+
+Setup:
 
 ```bash
 cp example.config.yaml config.yaml
 ```
 
-### 3. Получение Twitch креденшалов
-
-1. Перейдите на [Twitch Developers Console](https://dev.twitch.tv/console)
-2. Создайте приложение (Applications → Register Your Application)
-3. Получите `client_id` и `client_secret`
-4. Используйте OAuth Authorization Code flow для получения токенов
-5. Узнайте ваш `user_id` (используется как broadcaster_id и writer_id)
-
-### 4. Запуск
+Run:
 
 ```bash
-# Debug версия
-cargo run
-
-# Release версия (оптимизированная)
-cargo run --release
+cargo run -p twitch-bot
 ```
 
----
-
-## ⚙️ Конфигурация
-
-### Структура config.yaml
-
-```yaml
-environment:
-  env: "development" # "development" | "production" | "staging"
-
-twitch:
-  auth:
-    client_id: "your_client_id"
-    client_secret: "your_client_secret"
-    access_token: "your_access_token"
-    refresh_token: "your_refresh_token"
-    broadcaster_id: "broadcaster_user_id"
-    writer_id: "bot_user_id"
-  bot:
-    nick: "bot_name"
-    channels:
-      - "channel1"
-      - "channel2"
-    broadcaster_id: "broadcaster_user_id"
-    writer_id: "bot_user_id"
-```
-
-### Типы полей
-
-- **client_id, client_secret** - из Twitch Developers Console
-- **access_token, refresh_token** - получаются через OAuth flow
-- **broadcaster_id** - ID канала, на котором работает бот
-- **writer_id** - ID пользователя, от имени которого бот пишет сообщения
-- **nick** - имя бота для подключения
-- **channels** - список каналов для подключения
-
----
-
-## 📖 Использование
-
-### Поток данных
-
-```
-Twitch EventSub
-       │
-       ▼
-TwitchFetcher (implements EventFetcher)
-       │
-       ▼
-   Event
-       │
-       ▼
-BaseRouter (determines Route)
-       │
-       ▼
-  Handler (MessageHandler, CommandHandler, etc.)
-       │
-       ▼
-  Processing
-       │
-       ▼
-Sender (implements Sender)
-       │
-       ▼
-Twitch Helix API
-```
-
-### Создание custom handler
-
-Создайте новый handler, реализующий трейт `Handler`:
-
-```rust
-use async_trait::async_trait;
-use crate::domain::models::{Event, EventKind};
-use crate::infra::consumer::router::traits::Handler;
-
-pub struct CustomHandler;
-
-#[async_trait]
-impl Handler for CustomHandler {
-    async fn handle(&self, event: Event) -> anyhow::Result<()> {
-        match &event.kind {
-            EventKind::ChatMessage { text } => {
-                println!("Received message: {}", text);
-                // Обработка сообщения
-            }
-            EventKind::Command { name, args } => {
-                println!("Command: {} with args: {:?}", name, args);
-                // Обработка команды
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-}
-```
-
-### Добавление нового роута
-
-Добавьте новый вариант в `Route` enum и зарегистрируйте handler:
-
-```rust
-// 1. Добавьте новый вариант Route
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Route {
-    Message,
-    Command,
-    MyCustomEvent,  // ← новый вариант
-}
-
-// 2. Обновите From<&Event> для Route
-impl From<&Event> for Route {
-    fn from(event: &Event) -> Self {
-        match &event.kind {
-            EventKind::ChatMessage { .. } => Route::Message,
-            EventKind::Command { .. } => Route::Command,
-            // Добавьте логику для вашего события
-            _ => Route::MyCustomEvent,
-        }
-    }
-}
-
-// 3. Зарегистрируйте handler в main.rs
-let router = BaseRouter::new()
-    .route(Route::Message, Arc::new(MessageHandler::new(sender)))
-    .route(Route::Command, Arc::new(CommandHandler::new()))
-    .route(Route::MyCustomEvent, Arc::new(CustomHandler::new()));
-```
-
-### Использование Sender
-
-```rust
-use crate::domain::sender::Sender;
-
-async fn send_greeting(sender: &Arc<dyn Sender>) -> anyhow::Result<()> {
-    sender.send("channel_id", "Hello from bot!").await
-}
-```
-
----
-
-## 🔧 Разработка
-
-### Требования
-
-- Rust 1.93.1 или выше
-- Cargo 2024 edition
-
-### Запуск тестов
+Release build:
 
 ```bash
-# Все тесты
+cargo run -p twitch-bot --release
+```
+
+## Development
+
+Check the workspace:
+
+```bash
+cargo check
+```
+
+Run tests:
+
+```bash
 cargo test
-
-# Только unit тесты
-cargo test --lib
-
-# Интеграционные тесты (требуют mock серверов)
-cargo test --test irc_client_tests
-
-# Тесты с выходом в stdout
-cargo test -- --nocapture
 ```
 
-### Linting и форматирование
+Format:
 
 ```bash
-# Проверка clippy
-cargo clippy --all-targets --all-features
-
-# Авто-исправление clippy
-cargo clippy --fix --allow-dirty --allow-staged
-
-# Проверка форматирования
-cargo fmt --check
-
-# Авто-форматирование
 cargo fmt
+cargo fmt --check
 ```
 
-### Сборка
+Lint:
 
 ```bash
-# Debug сборка (быстрая, без оптимизаций)
-cargo build
-
-# Release сборка (оптимизированная)
-cargo build --release
+cargo clippy --workspace --all-targets
 ```
 
-### Добавление новой функциональности
+Notes:
 
-1. **Domain слой**: Добавьте модель или трейт
-2. **Infra слой**: Реализуйте интерфейс домена
-3. **Core слой**: Интегрируйте в оркестрацию
-4. **Тесты**: Покройте новую функциональность тестами
+- `twitch-sdk` has IRC integration tests
+- these tests use local sockets and may require a less restricted environment than a sandboxed runner
 
----
+## Current limitations
 
-## 🔐 Система конфигурации
+These limitations are real in the current code:
 
-### Типизированная конфигурация
+- no concrete interceptors are wired yet
+- reward routing only has a fallback handler in `bootstrap`
+- `twitch.bot.*` config is not connected to runtime behavior
+- config validation beyond wrapper-type checks is not implemented
+- the app is Unix-oriented because it depends on `tokio::signal::unix` and `playerctl`
+- unsupported Twitch events are collapsed into `System` events instead of getting dedicated branches
 
-Проект использует proc-macro `#[derive(WrapperType)]` для создания типобезопасных wrapper types:
+## License
 
-```rust
-#[derive(WrapperType)]
-pub struct ClientId(String);
-
-// Автоматически генерирует:
-// - impl TryFrom<String> for ClientId с валидацией
-// - impl Deserialize for ClientId
-// - метод as_str() для доступа к значению
-```
-
-### Преимущества
-
-1. **Безопасность типов**: невозможно перепутать `client_id` с `broadcaster_id`
-2. **Автоматическая валидация**: проверка на пустые строки при десериализации
-3. **Удобный API**: доступ к значению через `as_str()` метод
-4. **Поддержка YAML**: нативная десериализация из YAML файлов
-
-### Валидация
-
-Все поля конфигурации автоматически проверяются при загрузке:
-
-- Строки не могут быть пустыми
-- Массивы не могут быть пустыми (например, `channels`)
-- Ошибки валидации возвращаются как `ConfigError`
-
----
-
-## 🚦 Lifecycle приложения
-
-### Запуск
-
-1. Загрузка конфигурации (`ConfigLoader::load()`)
-2. Инициализация logging (`LogGuard::init()`)
-3. Создание компонентов (`Sender`, `Router`, `Consumer`, `Fetcher`)
-4. Создание `App` и запуск (`app.run()`)
-
-### Работа
-
-1. `Fetcher` получает события из Twitch EventSub
-2. `Consumer` обрабатывает события в цикле
-3. `Router` определяет `Route` для каждого события
-4. `Handler` обрабатывает событие
-5. `Sender` отправляет сообщения в Twitch
-
-### Graceful Shutdown
-
-1. `SignalHandler` ловит SIGINT/SIGTERM/SIGHUP
-2. `Fetcher.shutdown()` останавливает WebSocket соединение
-3. `Consumer` завершает обработку событий (с таймаутом 10s)
-4. Приложение завершает работу
-
----
-
-## 🗺️ Roadmap
-
-### Планируется
-
-- [ ] Поддержка middleware в роутере (логирование, метрики, аутентификация)
-- [ ] Database слой для сохранения состояния
-- [ ] Команды с аргументами и флагами
-- [ ] Rate limiting для защиты от спама
-- [ ] Модульная система плагинов
-- [ ] Web dashboard для управления
-- [ ] Логирование всех событий в базу данных
-- [ ] Поддержка несколько платформ (YouTube, Discord)
-
----
-
-## 📄 License
-
-Этот проект распространяется под лицензией MIT. Подробности в файле LICENSE.
-
----
-
-## 📞 Контакты
-
-Если у вас есть вопросы или предложения, пожалуйста:
-
-- Откройте issue на GitHub
-- Напишите в обсуждениях
-- Свяжитесь с автором
+MIT

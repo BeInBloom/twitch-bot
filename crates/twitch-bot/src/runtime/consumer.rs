@@ -8,10 +8,7 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::{
-    app::dispatcher::EventHandler,
-    model::Event,
-};
+use crate::{app::dispatch::Handler, model::Event};
 
 const BUFFER_SIZE: usize = 30;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(1);
@@ -22,11 +19,11 @@ pub trait EventConsumer: Send + Sync + 'static {
 }
 
 #[non_exhaustive]
-pub struct Consumer<H: EventHandler> {
+pub struct Consumer<H: Handler<Event>> {
     handler: Arc<H>,
 }
 
-impl<H: EventHandler> Consumer<H> {
+impl<H: Handler<Event>> Consumer<H> {
     pub fn new(handler: H) -> Self {
         Self {
             handler: Arc::new(handler),
@@ -35,7 +32,7 @@ impl<H: EventHandler> Consumer<H> {
 }
 
 #[async_trait]
-impl<H: EventHandler> EventConsumer for Consumer<H> {
+impl<H: Handler<Event>> EventConsumer for Consumer<H> {
     async fn consume(&self, mut ch: mpsc::Receiver<Event>) {
         let sem = Arc::new(Semaphore::new(BUFFER_SIZE));
 

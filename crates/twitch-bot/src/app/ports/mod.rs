@@ -4,4 +4,4 @@ pub mod now_playing;
 
 pub use event_source::EventSource;
 pub use message_sink::MessageSink;
-pub use now_playing::NowPlayingProvider;
+pub use now_playing::{MusicSkipProvider, NowPlayingProvider};

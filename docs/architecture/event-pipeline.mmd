@@ -1,0 +1,32 @@
+flowchart TD
+    A[EventSource] --> B[Global Middleware]
+    B --> C[EventRouter&lt;Event&gt;]
+
+    C -->|ChatMessage| D[ChatProjector: Event -&gt; ChatRequest]
+    D --> E[Chat Middleware]
+    E --> F[ChatRouter&lt;ChatRequest&gt;]
+    F -->|Plain| G[PlainMessageHandler]
+    F -->|Command| H[CommandProjector: ChatRequest -&gt; CommandRequest]
+    H --> I[Command Middleware]
+    I --> J[CommandRouter]
+    J -->|music| K[MusicHandler]
+    J -->|skip| L[SkipHandler]
+    J -->|fallback| M[UnknownCommandHandler]
+
+    C -->|RewardRedemption| N[RewardProjector: Event -&gt; RewardRequest]
+    N --> O[Reward Middleware]
+    O --> P[RewardRouter&lt;RewardRequest&gt;]
+    P -->|reward_1| Q[Reward1Handler]
+    P -->|reward_2| R[Reward2Handler]
+    P -->|reward_n| S[RewardNHandler]
+
+    C -->|System / Unsupported| T[SystemProjector: Event -&gt; SystemRequest]
+    T --> U[SystemHandler]
+
+    C -->|Subscribe| V[SubscriptionProjector]
+    V --> W[Subscription Middleware]
+    W --> X[SubscriptionHandler]
+
+    C -->|Raid| Y[RaidProjector]
+    Y --> Z[Raid Middleware]
+    Z --> AA[RaidHandler]

@@ -6,3 +6,8 @@ use crate::model::TrackInfo;
 pub trait NowPlayingProvider: Send + Sync + 'static {
     async fn current_track(&self) -> anyhow::Result<TrackInfo>;
 }
+
+#[async_trait]
+pub trait MusicSkipProvider: Send + Sync + 'static {
+    async fn skip(&self) -> anyhow::Result<()>;
+}

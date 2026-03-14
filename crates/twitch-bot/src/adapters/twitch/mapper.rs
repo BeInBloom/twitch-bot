@@ -2,19 +2,13 @@ use std::time::SystemTime;
 
 use twitch_sdk::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
 
-use crate::{
-    model::{
-        ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, SystemEvent, User,
-    },
+use crate::model::{
+    ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, SystemEvent, User,
 };
 
 pub(crate) fn map_event(event: TwitchEvent) -> Event {
     match event {
-        TwitchEvent::ChatMessage {
-            user,
-            target,
-            text,
-        } => map_chat_message(user, target, text),
+        TwitchEvent::ChatMessage { user, target, text } => map_chat_message(user, target, text),
         TwitchEvent::RewardRedemption {
             user,
             reward_id,

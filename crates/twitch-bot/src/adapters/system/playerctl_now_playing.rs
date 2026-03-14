@@ -28,10 +28,18 @@ impl Default for PlayerctlNowPlayingProvider {
 fn parse_track_info(value: String) -> Result<TrackInfo, ParseTrackInfoError> {
     let mut parts = value.splitn(5, ';');
 
-    let artist = parts.next().ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let title = parts.next().ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let album = parts.next().ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let url = parts.next().ok_or(ParseTrackInfoError::IncompleteMetadata)?;
+    let artist = parts
+        .next()
+        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
+    let title = parts
+        .next()
+        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
+    let album = parts
+        .next()
+        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
+    let url = parts
+        .next()
+        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
 
     Ok(TrackInfo {
         artist: artist.to_owned(),

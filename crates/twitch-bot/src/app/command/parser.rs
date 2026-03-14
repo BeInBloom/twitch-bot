@@ -1,4 +1,4 @@
-use crate::app::command::CommandInvocation;
+use super::{CommandInvocation, CommandName};
 
 pub(crate) struct CommandParser;
 
@@ -9,7 +9,7 @@ impl CommandParser {
             .and_then(|rest| {
                 let mut parts = rest.split_whitespace();
                 parts.next().map(|name| CommandInvocation {
-                    name: name.to_string(),
+                    name: CommandName::from(name),
                     args: parts.map(String::from).collect(),
                 })
             })
