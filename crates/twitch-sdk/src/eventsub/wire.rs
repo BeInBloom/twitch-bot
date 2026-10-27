@@ -1,21 +1,17 @@
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::subscription::{CHAT_MESSAGE, REWARD_REDEMPTION_ADD};
 use crate::{
-    Result,
+    Error, Result,
     event::{
-        Badge, Broadcaster, ChatMessage, Event, Mention, RedemptionStatus, Reply, Reward,
+        Badge, Broadcaster, ChatMessage, Event, Mention, ParentMessage, RedemptionStatus, Reward,
         RewardRedemption, User,
     },
 };
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a frame lives only until it is matched"
-)]
 pub(crate) enum Frame {
     Welcome(Welcome),
     Keepalive,
@@ -39,34 +35,35 @@ pub(crate) struct Welcome {
     pub keepalive: Duration,
 }
 
-pub(crate) fn decode(text: &str) -> Result<Frame> {
-    let Envelope { metadata, payload } = serde_json::from_str(text)?;
+impl FromStr for Frame {
+    type Err = Error;
 
-    Ok(match metadata.message_type.as_str() {
-        "session_welcome" => {
-            let WelcomePayload { session } = serde_json::from_value(payload)?;
-            Frame::Welcome(Welcome {
-                session_id: session.id,
-                keepalive: Duration::from_secs(session.keepalive_timeout_seconds),
-            })
-        }
-        "session_keepalive" => Frame::Keepalive,
-        "session_reconnect" => {
-            let ReconnectPayload { session } = serde_json::from_value(payload)?;
-            Frame::Reconnect {
-                url: session.reconnect_url,
+    fn from_str(text: &str) -> Result<Self> {
+        let Envelope { metadata, payload } = serde_json::from_str(text)?;
+
+        Ok(match metadata.message_type.as_str() {
+            "session_welcome" => {
+                let WelcomePayload { session } = serde_json::from_value(payload)?;
+                Self::Welcome(session.into())
             }
-        }
-        "notification" => decode_notification(metadata.message_id, payload)?,
-        "revocation" => {
-            let RevocationPayload { subscription } = serde_json::from_value(payload)?;
-            Frame::Revocation {
-                subscription: subscription.kind,
-                status: subscription.status,
+            "session_keepalive" => Self::Keepalive,
+            "session_reconnect" => {
+                let ReconnectPayload { session } = serde_json::from_value(payload)?;
+                Self::Reconnect {
+                    url: session.reconnect_url,
+                }
             }
-        }
-        other => Frame::Unknown(other.to_owned()),
-    })
+            "notification" => decode_notification(metadata.message_id, payload)?,
+            "revocation" => {
+                let RevocationPayload { subscription } = serde_json::from_value(payload)?;
+                Self::Revocation {
+                    subscription: subscription.kind,
+                    status: subscription.status,
+                }
+            }
+            other => Self::Unknown(other.to_owned()),
+        })
+    }
 }
 
 fn decode_notification(message_id: String, payload: Value) -> Result<Frame> {
@@ -76,12 +73,12 @@ fn decode_notification(message_id: String, payload: Value) -> Result<Frame> {
     } = serde_json::from_value(payload)?;
 
     let event = match subscription.kind.as_str() {
-        CHAT_MESSAGE => {
-            Event::ChatMessage(serde_json::from_value::<ChatMessageEvent>(event)?.into())
-        }
-        REWARD_REDEMPTION_ADD => {
-            Event::RewardRedemption(serde_json::from_value::<RedemptionEvent>(event)?.into())
-        }
+        CHAT_MESSAGE => Event::ChatMessage(Box::new(
+            serde_json::from_value::<ChatMessageEvent>(event)?.into(),
+        )),
+        REWARD_REDEMPTION_ADD => Event::RewardRedemption(Box::new(
+            serde_json::from_value::<RedemptionEvent>(event)?.into(),
+        )),
         _ => return Ok(Frame::UnsupportedNotification(subscription.kind)),
     };
 
@@ -142,14 +139,46 @@ struct SubscriptionInfo {
 #[derive(Deserialize)]
 struct ChatMessageEvent {
     message_id: String,
-    broadcaster_user_id: String,
-    broadcaster_user_login: String,
-    chatter_user_id: String,
-    chatter_user_login: String,
-    chatter_user_name: String,
+    #[serde(flatten)]
+    broadcaster: BroadcasterInfo,
+    #[serde(flatten)]
+    chatter: ChatterInfo,
     message: ChatMessageBody,
     badges: Vec<BadgeInfo>,
     reply: Option<ReplyInfo>,
+}
+
+#[derive(Deserialize)]
+struct RedemptionEvent {
+    id: String,
+    #[serde(flatten)]
+    broadcaster: BroadcasterInfo,
+    #[serde(flatten)]
+    user: ViewerInfo,
+    #[serde(default)]
+    user_input: String,
+    status: StatusInfo,
+    reward: RewardInfo,
+}
+
+#[derive(Deserialize)]
+struct BroadcasterInfo {
+    broadcaster_user_id: String,
+    broadcaster_user_login: String,
+}
+
+#[derive(Deserialize)]
+struct ChatterInfo {
+    chatter_user_id: String,
+    chatter_user_login: String,
+    chatter_user_name: String,
+}
+
+#[derive(Deserialize)]
+struct ViewerInfo {
+    user_id: String,
+    user_login: String,
+    user_name: String,
 }
 
 #[derive(Deserialize)]
@@ -183,18 +212,8 @@ struct ReplyInfo {
 }
 
 #[derive(Deserialize)]
-struct RedemptionEvent {
-    id: String,
-    broadcaster_user_id: String,
-    broadcaster_user_login: String,
-    user_id: String,
-    user_login: String,
-    user_name: String,
-    #[serde(default)]
-    user_input: String,
-    status: String,
-    reward: RewardInfo,
-}
+#[serde(transparent)]
+struct StatusInfo(String);
 
 #[derive(Deserialize)]
 struct RewardInfo {
@@ -203,40 +222,31 @@ struct RewardInfo {
     cost: u32,
 }
 
+impl From<WelcomeSession> for Welcome {
+    fn from(session: WelcomeSession) -> Self {
+        Self {
+            session_id: session.id,
+            keepalive: Duration::from_secs(session.keepalive_timeout_seconds),
+        }
+    }
+}
+
 impl From<ChatMessageEvent> for ChatMessage {
     fn from(event: ChatMessageEvent) -> Self {
         Self {
             message_id: event.message_id,
-            broadcaster: Broadcaster {
-                id: event.broadcaster_user_id,
-                login: event.broadcaster_user_login,
-            },
-            chatter: User {
-                id: event.chatter_user_id,
-                login: event.chatter_user_login,
-                display_name: event.chatter_user_name,
-            },
-            badges: event
-                .badges
-                .into_iter()
-                .map(|badge| parse_badge(badge.set_id))
-                .collect(),
+            broadcaster: event.broadcaster.into(),
+            chatter: event.chatter.into(),
+            badges: event.badges.into_iter().map(Badge::from).collect(),
             text: event.message.text,
             mentions: event
                 .message
                 .fragments
                 .into_iter()
                 .filter_map(|fragment| fragment.mention)
-                .map(|mention| Mention {
-                    user_id: mention.user_id,
-                    user_login: mention.user_login,
-                })
+                .map(Mention::from)
                 .collect(),
-            reply: event.reply.map(|reply| Reply {
-                parent_message_id: reply.parent_message_id,
-                parent_user_id: reply.parent_user_id,
-                parent_user_login: reply.parent_user_login,
-            }),
+            reply_to: event.reply.map(ParentMessage::from),
         }
     }
 }
@@ -245,43 +255,94 @@ impl From<RedemptionEvent> for RewardRedemption {
     fn from(event: RedemptionEvent) -> Self {
         Self {
             redemption_id: event.id,
-            broadcaster: Broadcaster {
-                id: event.broadcaster_user_id,
-                login: event.broadcaster_user_login,
-            },
-            user: User {
-                id: event.user_id,
-                login: event.user_login,
-                display_name: event.user_name,
-            },
-            reward: Reward {
-                id: event.reward.id,
-                title: event.reward.title,
-                cost: event.reward.cost,
-            },
+            broadcaster: event.broadcaster.into(),
+            user: event.user.into(),
+            reward: event.reward.into(),
             user_input: Some(event.user_input).filter(|input| !input.is_empty()),
-            status: parse_status(event.status),
+            status: event.status.into(),
         }
     }
 }
 
-fn parse_badge(set_id: String) -> Badge {
-    match set_id.as_str() {
-        "broadcaster" => Badge::Broadcaster,
-        "moderator" => Badge::Moderator,
-        "vip" => Badge::Vip,
-        "subscriber" => Badge::Subscriber,
-        "founder" => Badge::Founder,
-        _ => Badge::Unknown(set_id),
+impl From<BroadcasterInfo> for Broadcaster {
+    fn from(info: BroadcasterInfo) -> Self {
+        Self {
+            id: info.broadcaster_user_id,
+            login: info.broadcaster_user_login,
+        }
     }
 }
 
-fn parse_status(status: String) -> RedemptionStatus {
-    match status.as_str() {
-        "unfulfilled" => RedemptionStatus::Unfulfilled,
-        "fulfilled" => RedemptionStatus::Fulfilled,
-        "canceled" => RedemptionStatus::Canceled,
-        _ => RedemptionStatus::Unknown(status),
+impl From<ChatterInfo> for User {
+    fn from(info: ChatterInfo) -> Self {
+        Self {
+            id: info.chatter_user_id,
+            login: info.chatter_user_login,
+            display_name: info.chatter_user_name,
+        }
+    }
+}
+
+impl From<ViewerInfo> for User {
+    fn from(info: ViewerInfo) -> Self {
+        Self {
+            id: info.user_id,
+            login: info.user_login,
+            display_name: info.user_name,
+        }
+    }
+}
+
+impl From<RewardInfo> for Reward {
+    fn from(info: RewardInfo) -> Self {
+        Self {
+            id: info.id,
+            title: info.title,
+            cost: info.cost,
+        }
+    }
+}
+
+impl From<BadgeInfo> for Badge {
+    fn from(badge: BadgeInfo) -> Self {
+        match badge.set_id.as_str() {
+            "broadcaster" => Self::Broadcaster,
+            "moderator" => Self::Moderator,
+            "vip" => Self::Vip,
+            "subscriber" => Self::Subscriber,
+            "founder" => Self::Founder,
+            _ => Self::Unknown(badge.set_id),
+        }
+    }
+}
+
+impl From<StatusInfo> for RedemptionStatus {
+    fn from(StatusInfo(status): StatusInfo) -> Self {
+        match status.as_str() {
+            "unfulfilled" => Self::Unfulfilled,
+            "fulfilled" => Self::Fulfilled,
+            "canceled" => Self::Canceled,
+            _ => Self::Unknown(status),
+        }
+    }
+}
+
+impl From<MentionInfo> for Mention {
+    fn from(mention: MentionInfo) -> Self {
+        Self {
+            user_id: mention.user_id,
+            user_login: mention.user_login,
+        }
+    }
+}
+
+impl From<ReplyInfo> for ParentMessage {
+    fn from(reply: ReplyInfo) -> Self {
+        Self {
+            message_id: reply.parent_message_id,
+            user_id: reply.parent_user_id,
+            user_login: reply.parent_user_login,
+        }
     }
 }
 
@@ -291,7 +352,7 @@ mod tests {
 
     use super::*;
 
-    fn envelope(message_type: &str, payload: Value) -> String {
+    fn envelope(message_type: &str, payload: &Value) -> String {
         json!({
             "metadata": {
                 "message_id": "message-1",
@@ -303,10 +364,10 @@ mod tests {
         .to_string()
     }
 
-    fn notification(kind: &str, event: Value) -> String {
+    fn notification(kind: &str, event: &Value) -> String {
         envelope(
             "notification",
-            json!({
+            &json!({
                 "subscription": { "id": "sub", "type": kind, "version": "1", "status": "enabled" },
                 "event": event
             }),
@@ -314,7 +375,7 @@ mod tests {
     }
 
     fn decode_event(text: &str) -> Event {
-        match decode(text).unwrap() {
+        match text.parse::<Frame>().unwrap() {
             Frame::Notification { message_id, event } => {
                 assert_eq!(message_id, "message-1");
                 event
@@ -327,7 +388,7 @@ mod tests {
     fn decodes_chat_message_with_badges_mentions_and_reply() {
         let text = notification(
             CHAT_MESSAGE,
-            json!({
+            &json!({
                 "broadcaster_user_id": "1337",
                 "broadcaster_user_login": "cool_user",
                 "broadcaster_user_name": "Cool_User",
@@ -380,14 +441,14 @@ mod tests {
                 user_login: "bot".to_owned()
             }]
         );
-        assert_eq!(message.reply.unwrap().parent_message_id, "parent-1");
+        assert_eq!(message.reply_to.unwrap().message_id, "parent-1");
     }
 
     #[test]
     fn decodes_reward_redemption() {
         let text = notification(
             REWARD_REDEMPTION_ADD,
-            json!({
+            &json!({
                 "id": "redemption-1",
                 "broadcaster_user_id": "1337",
                 "broadcaster_user_login": "cool_user",
@@ -416,36 +477,36 @@ mod tests {
     fn decodes_session_frames() {
         let welcome = envelope(
             "session_welcome",
-            json!({ "session": { "id": "s1", "status": "connected", "keepalive_timeout_seconds": 10, "reconnect_url": null } }),
+            &json!({ "session": { "id": "s1", "status": "connected", "keepalive_timeout_seconds": 10, "reconnect_url": null } }),
         );
         let reconnect = envelope(
             "session_reconnect",
-            json!({ "session": { "id": "s1", "status": "reconnecting", "keepalive_timeout_seconds": null, "reconnect_url": "wss://new" } }),
+            &json!({ "session": { "id": "s1", "status": "reconnecting", "keepalive_timeout_seconds": null, "reconnect_url": "wss://new" } }),
         );
         let revocation = envelope(
             "revocation",
-            json!({ "subscription": { "id": "sub", "type": CHAT_MESSAGE, "version": "1", "status": "authorization_revoked" } }),
+            &json!({ "subscription": { "id": "sub", "type": CHAT_MESSAGE, "version": "1", "status": "authorization_revoked" } }),
         );
 
         assert!(matches!(
-            decode(&welcome).unwrap(),
+            welcome.parse::<Frame>().unwrap(),
             Frame::Welcome(Welcome { session_id, keepalive }) if session_id == "s1" && keepalive == Duration::from_secs(10)
         ));
         assert!(
-            matches!(decode(&reconnect).unwrap(), Frame::Reconnect { url } if url == "wss://new")
+            matches!(reconnect.parse::<Frame>().unwrap(), Frame::Reconnect { url } if url == "wss://new")
         );
         assert!(matches!(
-            decode(&revocation).unwrap(),
+            revocation.parse::<Frame>().unwrap(),
             Frame::Revocation { status, .. } if status == "authorization_revoked"
         ));
     }
 
     #[test]
     fn unsupported_notification_type_is_reported_not_failed() {
-        let text = notification("channel.follow", json!({}));
+        let text = notification("channel.follow", &json!({}));
 
         assert!(matches!(
-            decode(&text).unwrap(),
+            text.parse::<Frame>().unwrap(),
             Frame::UnsupportedNotification(kind) if kind == "channel.follow"
         ));
     }

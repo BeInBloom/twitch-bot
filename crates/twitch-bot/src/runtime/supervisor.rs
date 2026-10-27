@@ -9,7 +9,6 @@ use super::{EventConsumer, Shutdowner, SignalHandler};
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[non_exhaustive]
 pub struct Supervisor<S, F, C> {
     signal_handler: S,
     fetcher: F,

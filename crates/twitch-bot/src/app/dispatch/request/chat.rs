@@ -1,4 +1,7 @@
-use crate::{app::command::Command, model::ChatMessage};
+use crate::{
+    app::command::{Command, NotACommand},
+    model::ChatMessage,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChatRequest {
@@ -6,22 +9,22 @@ pub(crate) enum ChatRequest {
     Command(CommandRequest),
 }
 
-impl From<ChatMessage> for ChatRequest {
-    fn from(message: ChatMessage) -> Self {
-        match Command::parse(&message.text) {
-            Some(command) => Self::Command(CommandRequest { message, command }),
-            None => Self::Plain(PlainMessageRequest { message }),
+impl From<Box<ChatMessage>> for ChatRequest {
+    fn from(message: Box<ChatMessage>) -> Self {
+        match message.text.parse() {
+            Ok(command) => Self::Command(CommandRequest { message, command }),
+            Err(NotACommand) => Self::Plain(PlainMessageRequest { message }),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct PlainMessageRequest {
-    pub message: ChatMessage,
+    pub message: Box<ChatMessage>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandRequest {
-    pub message: ChatMessage,
+    pub message: Box<ChatMessage>,
     pub command: Command,
 }

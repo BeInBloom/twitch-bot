@@ -72,8 +72,8 @@ main
   -> LogGuard::init
   -> bootstrap::run
   -> ConfigFile::load
-  -> RefreshingToken + HelixClient (rotated refresh token is written back to config.yaml)
-  -> EventSub with ChatMessage and RewardRedemptionAdd subscriptions
+  -> ClientCredentials app access token (in memory, requested on start) + HelixClient
+  -> EventSub conduit with ChatMessage and RewardRedemptionAdd subscriptions
   -> adapters + routers + handlers wiring
   -> Supervisor::run
   -> EventSource::fetch
@@ -99,7 +99,8 @@ The runtime behavior currently implemented in code:
 - graceful shutdown waits up to `15s`
 - shutdown is triggered by `SIGINT`, `SIGTERM`, or `SIGHUP`
 - logging is initialized through `tracing` before anything else; default filter is `twitch_bot=debug,twitch_sdk=info` and can be overridden with `RUST_LOG`
-- EventSub reconnects after `5s` on any disconnect; EventSub follows `session_reconnect` to the provided `reconnect_url` without re-subscribing
+- EventSub uses a conduit managed with the app access token: on start the bot reuses its one-shard conduit (or creates one) and subscribes to it (an existing subscription, `409`, is fine); every WebSocket session is attached to shard `0` right after welcome
+- EventSub reconnects after `5s` on any disconnect; on `session_reconnect` it follows `reconnect_url` and re-attaches the shard without re-subscribing
 - malformed EventSub messages are logged and skipped instead of dropping the connection; duplicate notifications are dropped by `message_id`; a revoked subscription drops the connection and is re-created on reconnect
 - chat sends check the HTTP status and Helix `is_sent`; on `401` the cached token is invalidated and the send is retried once
 
@@ -147,17 +148,17 @@ Layers depend in one direction: `eventsub → helix → auth`.
 crates/twitch-sdk/src/
 ├── auth/
 │   ├── token.rs         AccessToken
-│   └── source.rs        TokenSource { Static, Refreshing }: lazy refresh by expiry, hourly /validate, rotation hook
+│   └── source.rs        TokenSource { Static, ClientCredentials }: app access token in memory, re-requested before expiry or after 401; TokenEvent for the consumer to log
 ├── helix/
-│   ├── client.rs        HTTP transport: headers, retry once on 401, status → Error, Ratelimit-Reset
+│   ├── client.rs        HTTP transport: GET/POST/PATCH, headers, retry once on 401, response → TryFrom
 │   ├── chat.rs          send_chat_message
-│   └── eventsub.rs      create_eventsub_subscription
+│   └── eventsub.rs      conduits, create_conduit, assign_websocket_shard, subscribe
 ├── eventsub/
 │   ├── subscription.rs  Subscription enum → type, version, condition
 │   ├── wire.rs          Twitch JSON → Frame and public events
 │   ├── session.rs       one WebSocket connection: welcome, keepalive, notification, reconnect, revocation
 │   ├── dedup.rs         recent message ids
-│   └── client.rs        EventSub::spawn → (Receiver<Event>, EventSubHandle)
+│   └── client.rs        conduit + shard attachment, EventSub::spawn → (Receiver<Event>, EventSubHandle)
 ├── event.rs             public events
 ├── error.rs             typed Error
 └── reconnect.rs         retry delay and cancellation
@@ -167,9 +168,7 @@ Adding a subscription touches `Subscription`, `wire` and `event`; exhaustive `ma
 
 ## Configuration
 
-The bot expects `./config.yaml`.
-
-Example:
+The bot expects `./config.yaml`:
 
 ```yaml
 twitch:
@@ -177,13 +176,22 @@ twitch:
     broadcaster_id: "..."
     client_id: "..."
     client_secret: "..."
-    refresh_token: "..."
     writer_id: "..."
 ```
 
-Every field is a non-empty string validated by `#[derive(WrapperType)]` wrappers. Secret fields (`client_secret`, `refresh_token`) use `#[derive(SecretDebug)]`, so they are printed as `***` in `Debug` output.
+Every field is a non-empty string validated by `#[derive(WrapperType)]` wrappers. `client_secret` uses `#[derive(SecretDebug)]` and is printed as `***` in `Debug` output.
 
-When Twitch rotates the refresh token, the bot writes the new value back into `config.yaml` atomically and keeps the file permissions. The file is re-serialized by `serde_yaml`, so comments and formatting in it are lost.
+No user tokens are stored anywhere: the bot requests an app access token (Client Credentials) on every start and keeps it in memory.
+
+### One-time authorization
+
+An app access token can read and send chat only after the account has authorized the app once. Open this URL logged in as the bot/broadcaster account (the redirect URI must be registered for the app in the Twitch developer console) and approve:
+
+```text
+https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=<CLIENT_ID>&redirect_uri=<REDIRECT_URI>&scope=user%3Abot+user%3Aread%3Achat+user%3Awrite%3Achat+channel%3Abot+channel%3Aread%3Aredemptions&force_verify=true
+```
+
+The token in the redirect can be ignored: Twitch remembers the authorization, and that is all the bot needs.
 
 ## Running
 
@@ -192,7 +200,7 @@ Requirements:
 - recent stable Rust with Edition 2024 support
 - `playerctl` installed and available in `PATH`
 - Unix-like OS
-- valid Twitch app credentials and refresh token
+- Twitch app credentials (`client_id`, `client_secret`) and the one-time authorization above
 
 Setup:
 

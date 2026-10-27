@@ -1,15 +1,29 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::sync::Arc;
 
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{Error, Result, auth::TokenSource, http};
+use crate::{
+    Error, Result,
+    auth::TokenSource,
+    http::{self, HttpResponse},
+};
 
 const HELIX_URL: &str = "https://api.twitch.tv/helix";
-const RATE_LIMIT_RESET_HEADER: &str = "Ratelimit-Reset";
+
+pub(crate) struct Json<T>(pub T);
+
+impl<T: DeserializeOwned> TryFrom<HttpResponse> for Json<T> {
+    type Error = Error;
+
+    fn try_from(response: HttpResponse) -> Result<Self> {
+        if response.status.is_success() {
+            return response.json().map(Self);
+        }
+
+        Err(response.into())
+    }
+}
 
 #[derive(Deserialize)]
 pub(crate) struct DataResponse<T> {
@@ -48,63 +62,62 @@ impl HelixClient {
         })
     }
 
+    pub(crate) async fn get<R>(&self, path: &str) -> Result<R>
+    where
+        R: TryFrom<HttpResponse, Error = Error>,
+    {
+        self.execute(Method::GET, path, None::<&()>).await
+    }
+
     pub(crate) async fn post<B, R>(&self, path: &str, body: &B) -> Result<R>
     where
-        B: Serialize + ?Sized,
-        R: DeserializeOwned,
+        B: Serialize + Sync + ?Sized,
+        R: TryFrom<HttpResponse, Error = Error>,
     {
-        let mut response = self.try_post(path, body).await?;
+        self.execute(Method::POST, path, Some(body)).await
+    }
 
-        if response.status() == StatusCode::UNAUTHORIZED {
+    pub(crate) async fn patch<B, R>(&self, path: &str, body: &B) -> Result<R>
+    where
+        B: Serialize + Sync + ?Sized,
+        R: TryFrom<HttpResponse, Error = Error>,
+    {
+        self.execute(Method::PATCH, path, Some(body)).await
+    }
+
+    async fn execute<B, R>(&self, method: Method, path: &str, body: Option<&B>) -> Result<R>
+    where
+        B: Serialize + Sync + ?Sized,
+        R: TryFrom<HttpResponse, Error = Error>,
+    {
+        let mut response = Box::pin(self.send(method.clone(), path, body)).await?;
+
+        if response.status == StatusCode::UNAUTHORIZED {
             self.inner.tokens.invalidate().await;
-            response = self.try_post(path, body).await?;
+            response = Box::pin(self.send(method, path, body)).await?;
         }
 
-        Ok(ensure_success(response).await?.json().await?)
+        response.try_into()
     }
 
-    async fn try_post<B: Serialize + ?Sized>(&self, path: &str, body: &B) -> Result<Response> {
+    async fn send<B>(&self, method: Method, path: &str, body: Option<&B>) -> Result<HttpResponse>
+    where
+        B: Serialize + Sync + ?Sized,
+    {
         let token = self.inner.tokens.access_token().await?;
 
-        Ok(self
+        let request = self
             .inner
             .http
-            .post(format!("{}{path}", self.inner.base_url))
+            .request(method, format!("{}{path}", self.inner.base_url))
             .bearer_auth(token.as_str())
-            .header("Client-Id", &self.inner.client_id)
-            .json(body)
-            .send()
-            .await?)
+            .header("Client-Id", &self.inner.client_id);
+
+        let request = match body {
+            Some(body) => request.json(body),
+            None => request,
+        };
+
+        HttpResponse::send(request).await
     }
-}
-
-async fn ensure_success(response: Response) -> Result<Response> {
-    let status = response.status();
-    if status.is_success() {
-        return Ok(response);
-    }
-
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        return Err(Error::RateLimited {
-            reset_at: rate_limit_reset(&response),
-        });
-    }
-
-    let body = response.text().await.unwrap_or_default();
-    Err(Error::Http {
-        status: status.as_u16(),
-        body,
-    })
-}
-
-fn rate_limit_reset(response: &Response) -> Option<SystemTime> {
-    let epoch_secs = response
-        .headers()
-        .get(RATE_LIMIT_RESET_HEADER)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()?;
-
-    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(epoch_secs))
 }

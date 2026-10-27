@@ -1,36 +1,43 @@
 use std::time::Duration;
 
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use serde::Deserialize;
 use tokio::{sync::Mutex, time::Instant};
-use tracing::{debug, info, warn};
 
 use super::AccessToken;
-use crate::{Error, Result, http};
+use crate::{
+    Error, Result,
+    http::{self, HttpResponse},
+};
 
 const OAUTH_URL: &str = "https://id.twitch.tv/oauth2";
 const REFRESH_MARGIN: Duration = Duration::from_secs(600);
-// Twitch требует проверять токен при старте и затем раз в час:
-// приложения, которые этого не делают, отключают по итогам аудита.
-const VALIDATE_INTERVAL: Duration = Duration::from_secs(3600);
 
-pub type OnTokenRotation = Box<dyn Fn(&str) + Send + Sync>;
+type EventListener = Box<dyn Fn(TokenEvent<'_>) + Send + Sync>;
+
+#[derive(Debug)]
+pub enum TokenEvent<'a> {
+    Issued {
+        access_token: &'a AccessToken,
+        expires_in: Duration,
+    },
+}
 
 pub enum TokenSource {
     Static(AccessToken),
-    Refreshing(RefreshingToken),
+    ClientCredentials(ClientCredentials),
 }
 
 impl TokenSource {
     pub async fn access_token(&self) -> Result<AccessToken> {
         match self {
             Self::Static(token) => Ok(token.clone()),
-            Self::Refreshing(source) => source.access_token().await,
+            Self::ClientCredentials(source) => source.access_token().await,
         }
     }
 
     pub async fn invalidate(&self) {
-        if let Self::Refreshing(source) = self {
+        if let Self::ClientCredentials(source) = self {
             source.invalidate().await;
         }
     }
@@ -42,95 +49,71 @@ impl From<AccessToken> for TokenSource {
     }
 }
 
-impl From<RefreshingToken> for TokenSource {
-    fn from(source: RefreshingToken) -> Self {
-        Self::Refreshing(source)
+impl From<ClientCredentials> for TokenSource {
+    fn from(source: ClientCredentials) -> Self {
+        Self::ClientCredentials(source)
     }
 }
 
-pub struct RefreshingToken {
+pub struct ClientCredentials {
     http: Client,
     oauth_url: String,
     client_id: String,
     client_secret: String,
-    state: Mutex<State>,
-    on_rotation: Option<OnTokenRotation>,
-}
-
-struct State {
-    refresh_token: String,
-    issued: Option<IssuedToken>,
+    issued: Mutex<Option<IssuedToken>>,
+    listener: Option<EventListener>,
 }
 
 struct IssuedToken {
     token: AccessToken,
     expires_at: Instant,
-    validated_at: Instant,
 }
 
 impl IssuedToken {
-    fn new(token: AccessToken, expires_in_secs: u64) -> Self {
-        let now = Instant::now();
-        Self {
-            token,
-            expires_at: now + Duration::from_secs(expires_in_secs),
-            validated_at: now,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Next {
-    Reuse(AccessToken),
-    Validate(AccessToken),
-    Refresh,
-}
-
-fn next_step(issued: Option<&IssuedToken>, now: Instant) -> Next {
-    match issued {
-        None => Next::Refresh,
-        Some(issued) if issued.expires_at <= now + REFRESH_MARGIN => Next::Refresh,
-        Some(issued) if now.duration_since(issued.validated_at) >= VALIDATE_INTERVAL => {
-            Next::Validate(issued.token.clone())
-        }
-        Some(issued) => Next::Reuse(issued.token.clone()),
+    fn is_fresh(&self, now: Instant) -> bool {
+        self.expires_at > now + REFRESH_MARGIN
     }
 }
 
 #[derive(Deserialize)]
-struct TokenResponse {
+struct TokenGrant {
     access_token: String,
     expires_in: u64,
-    refresh_token: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ValidationResponse {
-    expires_in: u64,
+impl TryFrom<HttpResponse> for TokenGrant {
+    type Error = Error;
+
+    fn try_from(response: HttpResponse) -> Result<Self> {
+        if response.status.is_success() {
+            return response.json();
+        }
+
+        Err(Error::Auth {
+            status: response.status.as_u16(),
+            body: response.body_text(),
+        })
+    }
 }
 
-impl RefreshingToken {
-    pub fn new(
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-        refresh_token: impl Into<String>,
-    ) -> Result<Self> {
+impl ClientCredentials {
+    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Result<Self> {
         Ok(Self {
             http: http::client()?,
             oauth_url: OAUTH_URL.to_owned(),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
-            state: Mutex::new(State {
-                refresh_token: refresh_token.into(),
-                issued: None,
-            }),
-            on_rotation: None,
+            issued: Mutex::new(None),
+            listener: None,
         })
     }
 
     #[must_use]
-    pub fn with_rotation_callback(mut self, callback: OnTokenRotation) -> Self {
-        self.on_rotation = Some(callback);
+    pub fn with_event_listener(
+        mut self,
+        listener: impl Fn(TokenEvent<'_>) + Send + Sync + 'static,
+    ) -> Self {
+        self.listener = Some(Box::new(listener));
         self
     }
 
@@ -141,80 +124,49 @@ impl RefreshingToken {
     }
 
     pub async fn access_token(&self) -> Result<AccessToken> {
-        let mut state = self.state.lock().await;
+        let mut issued = self.issued.lock().await;
 
-        match next_step(state.issued.as_ref(), Instant::now()) {
-            Next::Reuse(token) => Ok(token),
-            Next::Validate(token) => self.validate(&mut state, token).await,
-            Next::Refresh => self.refresh(&mut state).await,
+        if let Some(current) = issued
+            .as_ref()
+            .filter(|current| current.is_fresh(Instant::now()))
+        {
+            return Ok(current.token.clone());
         }
+
+        let grant = Box::pin(self.request_token()).await?;
+        let token = AccessToken::new(grant.access_token);
+        let expires_in = Duration::from_secs(grant.expires_in);
+
+        self.notify(TokenEvent::Issued {
+            access_token: &token,
+            expires_in,
+        });
+
+        *issued = Some(IssuedToken {
+            token: token.clone(),
+            expires_at: Instant::now() + expires_in,
+        });
+        Ok(token)
     }
 
     pub async fn invalidate(&self) {
-        self.state.lock().await.issued = None;
+        *self.issued.lock().await = None;
     }
 
-    async fn validate(&self, state: &mut State, token: AccessToken) -> Result<AccessToken> {
-        let response = self
-            .http
-            .get(format!("{}/validate", self.oauth_url))
-            .header("Authorization", format!("OAuth {}", token.as_str()))
-            .send()
-            .await?;
+    async fn request_token(&self) -> Result<TokenGrant> {
+        let request = self.http.post(format!("{}/token", self.oauth_url)).form(&[
+            ("client_id", self.client_id.as_str()),
+            ("client_secret", self.client_secret.as_str()),
+            ("grant_type", "client_credentials"),
+        ]);
 
-        if response.status() == StatusCode::UNAUTHORIZED {
-            warn!("access token is no longer valid, refreshing");
-            return self.refresh(state).await;
-        }
-
-        let validation: ValidationResponse = response.error_for_status()?.json().await?;
-        state.issued = Some(IssuedToken::new(token.clone(), validation.expires_in));
-        Ok(token)
+        HttpResponse::send(request).await?.try_into()
     }
 
-    async fn refresh(&self, state: &mut State) -> Result<AccessToken> {
-        let response = self
-            .http
-            .post(format!("{}/token", self.oauth_url))
-            .form(&[
-                ("client_id", self.client_id.as_str()),
-                ("client_secret", self.client_secret.as_str()),
-                ("grant_type", "refresh_token"),
-                ("refresh_token", state.refresh_token.as_str()),
-            ])
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Auth(format!(
-                "token refresh failed with {status}: {body}"
-            )));
+    fn notify(&self, event: TokenEvent<'_>) {
+        if let Some(listener) = &self.listener {
+            listener(event);
         }
-
-        let issued: TokenResponse = response.json().await?;
-        debug!(access_token = %issued.access_token, "access token refreshed");
-        info!("access token refreshed, expires in {}s", issued.expires_in);
-
-        self.rotate_refresh_token(state, issued.refresh_token);
-
-        let token = AccessToken::new(issued.access_token);
-        state.issued = Some(IssuedToken::new(token.clone(), issued.expires_in));
-        Ok(token)
-    }
-
-    fn rotate_refresh_token(&self, state: &mut State, refresh_token: Option<String>) {
-        let Some(refresh_token) = refresh_token.filter(|token| *token != state.refresh_token)
-        else {
-            return;
-        };
-
-        warn!("twitch rotated the refresh token");
-        if let Some(callback) = &self.on_rotation {
-            callback(&refresh_token);
-        }
-        state.refresh_token = refresh_token;
     }
 }
 
@@ -231,80 +183,46 @@ mod tests {
 
     const FOUR_HOURS: u64 = 4 * 3600;
 
-    fn token_response(
-        access_token: &str,
-        expires_in: u64,
-        refresh_token: &str,
-    ) -> ResponseTemplate {
+    fn token_response(access_token: &str, expires_in: u64) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": access_token,
             "expires_in": expires_in,
-            "refresh_token": refresh_token,
+            "token_type": "bearer",
         }))
     }
 
-    async fn source(server: &MockServer) -> RefreshingToken {
-        RefreshingToken::new("id", "secret", "refresh")
+    fn source(server: &MockServer) -> ClientCredentials {
+        ClientCredentials::new("id", "secret")
             .unwrap()
             .with_oauth_url(server.uri())
     }
 
-    fn issued(expires_in: Duration, validated_ago: Duration) -> IssuedToken {
-        let now = Instant::now();
-        IssuedToken {
-            token: AccessToken::new("token"),
-            expires_at: now + expires_in,
-            validated_at: now.checked_sub(validated_ago).unwrap(),
-        }
-    }
-
-    #[test]
-    fn next_step_decides_by_expiry_and_validation_age() {
-        let now = Instant::now();
-        let token = AccessToken::new("token");
-        let hour = Duration::from_secs(3600);
-
-        assert_eq!(next_step(None, now), Next::Refresh);
-        assert_eq!(
-            next_step(Some(&issued(Duration::from_secs(60), Duration::ZERO)), now),
-            Next::Refresh
-        );
-        assert_eq!(
-            next_step(Some(&issued(4 * hour, 2 * hour)), now),
-            Next::Validate(token.clone())
-        );
-        assert_eq!(
-            next_step(Some(&issued(4 * hour, Duration::ZERO)), now),
-            Next::Reuse(token)
-        );
-    }
-
     #[tokio::test]
-    async fn refreshes_once_and_reuses_token() {
+    async fn requests_token_once_and_reuses_it() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .and(body_string_contains("grant_type=refresh_token"))
-            .respond_with(token_response("access", FOUR_HOURS, "refresh"))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .respond_with(token_response("access", FOUR_HOURS))
             .expect(1)
             .mount(&server)
             .await;
-        let source = source(&server).await;
+        let source = source(&server);
 
         assert_eq!(source.access_token().await.unwrap().as_str(), "access");
         assert_eq!(source.access_token().await.unwrap().as_str(), "access");
     }
 
     #[tokio::test]
-    async fn refreshes_again_after_invalidate_or_expiry() {
+    async fn requests_new_token_after_invalidate_or_expiry() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(token_response("access", 0, "refresh"))
+            .respond_with(token_response("access", 0))
             .expect(3)
             .mount(&server)
             .await;
-        let source = source(&server).await;
+        let source = source(&server);
 
         source.access_token().await.unwrap();
         source.access_token().await.unwrap();
@@ -313,58 +231,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_token_on_validation_triggers_refresh() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/validate"))
-            .respond_with(ResponseTemplate::new(401))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(token_response("fresh", FOUR_HOURS, "refresh"))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let source = source(&server).await;
-        source.state.lock().await.issued =
-            Some(issued(Duration::from_secs(FOUR_HOURS), VALIDATE_INTERVAL));
-
-        assert_eq!(source.access_token().await.unwrap().as_str(), "fresh");
-    }
-
-    #[tokio::test]
-    async fn notifies_about_rotated_refresh_token() {
+    async fn reports_issued_token() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(token_response("access", FOUR_HOURS, "rotated"))
+            .respond_with(token_response("access", FOUR_HOURS))
             .mount(&server)
             .await;
-        let rotated = Arc::new(StdMutex::new(None));
-        let captured = rotated.clone();
-        let source = source(&server)
-            .await
-            .with_rotation_callback(Box::new(move |token| {
-                *captured.lock().unwrap() = Some(token.to_owned());
-            }));
+        let issued = Arc::new(StdMutex::new(None));
+        let captured = issued.clone();
+        let source = source(&server).with_event_listener(
+            move |TokenEvent::Issued {
+                      access_token,
+                      expires_in,
+                  }| {
+                *captured.lock().unwrap() = Some((access_token.clone(), expires_in));
+            },
+        );
 
         source.access_token().await.unwrap();
 
-        assert_eq!(rotated.lock().unwrap().as_deref(), Some("rotated"));
+        assert_eq!(
+            *issued.lock().unwrap(),
+            Some((AccessToken::new("access"), Duration::from_secs(FOUR_HOURS)))
+        );
     }
 
     #[tokio::test]
-    async fn failed_refresh_is_an_auth_error() {
+    async fn failed_request_is_an_auth_error() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(ResponseTemplate::new(400).set_body_string("Invalid refresh token"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid client secret"))
             .mount(&server)
             .await;
-        let source = source(&server).await;
 
-        assert!(matches!(source.access_token().await, Err(Error::Auth(_))));
+        assert!(matches!(
+            source(&server).access_token().await,
+            Err(Error::Auth { status: 400, .. })
+        ));
     }
 }

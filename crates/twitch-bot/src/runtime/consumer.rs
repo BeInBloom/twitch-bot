@@ -1,7 +1,5 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
-use anyhow::Error;
-use async_trait::async_trait;
 use tokio::{
     sync::{Semaphore, mpsc},
     time::timeout,
@@ -10,20 +8,18 @@ use tracing::error;
 
 use crate::{app::dispatch::Handler, model::Event};
 
-const MAX_CONCURRENT_HANDLERS: usize = 30;
+const MAX_CONCURRENT_HANDLERS: u32 = 30;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[async_trait]
 pub trait EventConsumer: Send + Sync + 'static {
-    async fn consume(&self, ch: mpsc::Receiver<Event>);
+    fn consume(&self, events: mpsc::Receiver<Event>) -> impl Future<Output = ()> + Send;
 }
 
-#[non_exhaustive]
-pub struct Consumer<H: Handler<Event>> {
+pub struct Consumer<H> {
     handler: Arc<H>,
 }
 
-impl<H: Handler<Event>> Consumer<H> {
+impl<H> Consumer<H> {
     pub fn new(handler: H) -> Self {
         Self {
             handler: Arc::new(handler),
@@ -31,37 +27,27 @@ impl<H: Handler<Event>> Consumer<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler<Event>> EventConsumer for Consumer<H> {
-    async fn consume(&self, mut ch: mpsc::Receiver<Event>) {
-        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS));
+    async fn consume(&self, mut events: mpsc::Receiver<Event>) {
+        let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS as usize));
 
-        while let Some(event) = ch.recv().await {
-            let permit = match sem.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => break,
+        while let Some(event) = events.recv().await {
+            let Ok(permit) = permits.clone().acquire_owned().await else {
+                break;
             };
-
             let handler = self.handler.clone();
 
             tokio::spawn(async move {
                 let _permit = permit;
 
                 match timeout(HANDLER_TIMEOUT, handler.handle(event)).await {
-                    Ok(res) => {
-                        if let Err(err) = res {
-                            handle_error(err);
-                        }
-                    }
-                    Err(_) => error!("handler timeout"),
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => error!("handler failed: {error:#}"),
+                    Err(_) => error!("handler timed out"),
                 }
             });
         }
 
-        let _ = sem.acquire_many(MAX_CONCURRENT_HANDLERS as u32).await;
+        let _all_handlers_finished = permits.acquire_many(MAX_CONCURRENT_HANDLERS).await;
     }
-}
-
-fn handle_error(err: Error) {
-    error!("something wrong: {}", err);
 }

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 const COMMAND_PREFIX: char = '!';
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7,16 +9,21 @@ pub(crate) enum Command {
     Unknown(String),
 }
 
-impl Command {
-    pub fn parse(text: &str) -> Option<Self> {
-        let rest = text.strip_prefix(COMMAND_PREFIX)?;
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NotACommand;
+
+impl FromStr for Command {
+    type Err = NotACommand;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let rest = text.strip_prefix(COMMAND_PREFIX).ok_or(NotACommand)?;
         if rest.starts_with(char::is_whitespace) {
-            return None;
+            return Err(NotACommand);
         }
 
-        let name = rest.split_whitespace().next()?;
+        let name = rest.split_whitespace().next().ok_or(NotACommand)?;
 
-        Some(match name {
+        Ok(match name {
             "music" => Self::Music,
             "skip" => Self::Skip,
             unknown => Self::Unknown(unknown.to_owned()),
@@ -30,22 +37,22 @@ mod tests {
 
     #[test]
     fn parses_known_commands_ignoring_args() {
-        assert_eq!(Command::parse("!music"), Some(Command::Music));
-        assert_eq!(Command::parse("!skip please"), Some(Command::Skip));
+        assert_eq!("!music".parse(), Ok(Command::Music));
+        assert_eq!("!skip please".parse(), Ok(Command::Skip));
     }
 
     #[test]
     fn keeps_unknown_command_name() {
         assert_eq!(
-            Command::parse("!discord"),
-            Some(Command::Unknown("discord".to_owned()))
+            "!discord".parse(),
+            Ok(Command::Unknown("discord".to_owned()))
         );
     }
 
     #[test]
     fn requires_name_right_after_prefix() {
-        assert_eq!(Command::parse("! music"), None);
-        assert_eq!(Command::parse("!"), None);
-        assert_eq!(Command::parse("hello !music"), None);
+        assert_eq!("! music".parse::<Command>(), Err(NotACommand));
+        assert_eq!("!".parse::<Command>(), Err(NotACommand));
+        assert_eq!("hello !music".parse::<Command>(), Err(NotACommand));
     }
 }

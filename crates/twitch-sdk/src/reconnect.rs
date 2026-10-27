@@ -23,7 +23,7 @@ where
         loop {
             let result = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => break,
+                () = cancel.cancelled() => break,
                 result = run_connection() => result,
             };
 
@@ -43,8 +43,8 @@ where
             }
 
             tokio::select! {
-                _ = cancel.cancelled() => break,
-                _ = tokio::time::sleep(RECONNECT_DELAY) => {}
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(RECONNECT_DELAY) => {}
             }
         }
 

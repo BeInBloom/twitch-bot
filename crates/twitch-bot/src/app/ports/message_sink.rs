@@ -1,8 +1,11 @@
-use async_trait::async_trait;
+use std::future::Future;
 
 use crate::model::ChatTarget;
 
-#[async_trait]
 pub trait MessageSink: Send + Sync + 'static {
-    async fn send(&self, target: &ChatTarget, message: &str) -> anyhow::Result<()>;
+    fn send(
+        &self,
+        target: &ChatTarget,
+        message: &str,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
 }

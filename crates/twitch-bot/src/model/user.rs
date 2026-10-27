@@ -1,6 +1,6 @@
 use crate::model::Role;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     Twitch,
     Console,
@@ -20,7 +20,7 @@ impl User {
             id: "0".into(),
             display_name: "System".into(),
             platform: Platform::Console,
-            role: Role::new(),
+            role: Role::PLEB,
         }
     }
 }

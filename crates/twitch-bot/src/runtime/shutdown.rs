@@ -1,6 +1,5 @@
-use async_trait::async_trait;
+use std::future::Future;
 
-#[async_trait]
 pub trait Shutdowner: Send + Sync {
-    async fn shutdown(&self) -> anyhow::Result<()>;
+    fn shutdown(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
 }

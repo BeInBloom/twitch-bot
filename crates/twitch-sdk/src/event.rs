@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    ChatMessage(ChatMessage),
-    RewardRedemption(RewardRedemption),
+    ChatMessage(Box<ChatMessage>),
+    RewardRedemption(Box<RewardRedemption>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub struct ChatMessage {
     pub badges: Vec<Badge>,
     pub text: String,
     pub mentions: Vec<Mention>,
-    pub reply: Option<Reply>,
+    pub reply_to: Option<ParentMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,10 +55,10 @@ pub struct Mention {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reply {
-    pub parent_message_id: String,
-    pub parent_user_id: String,
-    pub parent_user_login: String,
+pub struct ParentMessage {
+    pub message_id: String,
+    pub user_id: String,
+    pub user_login: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

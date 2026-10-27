@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     dedup::RecentIds,
-    wire::{self, Frame, Welcome},
+    wire::{Frame, Welcome},
 };
 use crate::{Error, Result, event::Event};
 
@@ -17,7 +17,7 @@ const KEEPALIVE_GRACE: Duration = Duration::from_secs(5);
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub(crate) struct Session {
-    ws: WsStream,
+    ws: Box<WsStream>,
     id: String,
     keepalive: Duration,
 }
@@ -25,7 +25,8 @@ pub(crate) struct Session {
 impl Session {
     pub async fn connect(url: &str) -> Result<Self> {
         info!("connecting to EventSub: {url}");
-        let (mut ws, _) = connect_async(url).await?;
+        let (ws, _) = Box::pin(connect_async(url)).await?;
+        let mut ws = Box::new(ws);
 
         let welcome = wait_for_welcome(&mut ws).await?;
         info!("EventSub session established: {}", welcome.session_id);
@@ -48,7 +49,7 @@ impl Session {
     ) -> Result<String> {
         loop {
             let text = next_text(&mut self.ws, self.keepalive).await?;
-            let frame = match wire::decode(&text) {
+            let frame = match text.parse::<Frame>() {
                 Ok(frame) => frame,
                 Err(e) => {
                     warn!("skipping malformed EventSub message: {e} - {text}");
@@ -93,7 +94,7 @@ impl Session {
 
 async fn wait_for_welcome(ws: &mut WsStream) -> Result<Welcome> {
     loop {
-        match wire::decode(&next_text(ws, WELCOME_TIMEOUT).await?) {
+        match next_text(ws, WELCOME_TIMEOUT).await?.parse::<Frame>() {
             Ok(Frame::Welcome(welcome)) => return Ok(welcome),
             Ok(_) => debug!("skipping EventSub message before welcome"),
             Err(e) => warn!("skipping malformed EventSub message before welcome: {e}"),
@@ -111,7 +112,7 @@ async fn next_text(ws: &mut WsStream, wait: Duration) -> Result<String> {
         match message {
             Message::Text(text) => return Ok(text),
             Message::Close(_) => return Err(Error::ConnectionClosed("close frame")),
-            _ => continue,
+            _ => {}
         }
     }
 }

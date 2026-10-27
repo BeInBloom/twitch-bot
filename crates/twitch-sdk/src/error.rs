@@ -6,8 +6,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("authentication failed: {0}")]
-    Auth(String),
+    #[error("token request failed with {status}: {body}")]
+    Auth { status: u16, body: String },
 
     #[error("twitch api returned {status}: {body}")]
     Http { status: u16, body: String },
@@ -26,6 +26,13 @@ pub enum Error {
 
     #[error("unexpected payload from twitch: {0}")]
     Protocol(#[from] serde_json::Error),
+
+    #[error("conduit shard {shard} rejected: {code} - {message}")]
+    ShardAssignment {
+        shard: String,
+        code: String,
+        message: String,
+    },
 
     #[error("eventsub subscription revoked: {subscription} ({status})")]
     Revoked {

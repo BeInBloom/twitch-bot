@@ -1,9 +1,9 @@
-use async_trait::async_trait;
+use std::future::Future;
+
 use tokio::sync::mpsc;
 
 use crate::model::Event;
 
-#[async_trait]
 pub trait EventSource: Send + Sync + 'static {
-    async fn fetch(&self) -> anyhow::Result<mpsc::Receiver<Event>>;
+    fn fetch(&self) -> impl Future<Output = anyhow::Result<mpsc::Receiver<Event>>> + Send;
 }

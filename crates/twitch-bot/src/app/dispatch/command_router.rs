@@ -74,7 +74,7 @@ mod tests {
             received_at: SystemTime::now(),
         };
 
-        match ChatRequest::from(message) {
+        match ChatRequest::from(Box::new(message)) {
             ChatRequest::Command(request) => request,
             ChatRequest::Plain(_) => panic!("{text} is not a command"),
         }

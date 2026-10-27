@@ -1,6 +1,5 @@
-use std::fmt::Display;
+use std::{fmt, future::Future};
 
-use async_trait::async_trait;
 use tokio::signal::unix::{SignalKind, signal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,36 +9,22 @@ pub enum ShutdownKind {
     Hangup,
 }
 
-impl Display for ShutdownKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ShutdownKind::Terminate => write!(f, "SIGTERM"),
-            ShutdownKind::Interrupt => write!(f, "SIGINT (Ctrl+C)"),
-            ShutdownKind::Hangup => write!(f, "SIGHUP"),
-        }
+impl fmt::Display for ShutdownKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Terminate => "SIGTERM",
+            Self::Interrupt => "SIGINT (Ctrl+C)",
+            Self::Hangup => "SIGHUP",
+        })
     }
 }
 
-#[async_trait]
 pub trait SignalHandler: Send + Sync {
-    async fn wait_for_shutdown(&self) -> ShutdownKind;
+    fn wait_for_shutdown(&self) -> impl Future<Output = ShutdownKind> + Send;
 }
 
 pub struct UnixSignalHandler;
 
-impl Default for UnixSignalHandler {
-    fn default() -> Self {
-        Self
-    }
-}
-
-impl UnixSignalHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
 impl SignalHandler for UnixSignalHandler {
     async fn wait_for_shutdown(&self) -> ShutdownKind {
         let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");

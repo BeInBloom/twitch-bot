@@ -2,22 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::{
-    app::{
-        dispatch::{Handler, request::CommandRequest},
-        ports::{MessageSink, NowPlayingProvider},
-    },
-    model::TrackInfo,
+use crate::app::{
+    dispatch::{Handler, request::CommandRequest},
+    ports::{MessageSink, NowPlayingProvider},
 };
 
 const NOTHING_PLAYING_RESPONSE: &str = "сейчас ничего не играет";
-
-fn describe_track(track: Option<TrackInfo>) -> String {
-    match track {
-        Some(track) => format!("сейчас играет трек {} - {}", track.artist, track.title),
-        None => NOTHING_PLAYING_RESPONSE.to_string(),
-    }
-}
 
 pub(crate) struct MusicHandler<S, P> {
     sender: Arc<S>,
@@ -39,7 +29,10 @@ where
     P: NowPlayingProvider,
 {
     async fn handle(&self, request: CommandRequest) -> anyhow::Result<()> {
-        let response = describe_track(self.now_playing.current_track().await?);
+        let response = match self.now_playing.current_track().await? {
+            Some(track) => format!("сейчас играет трек {track}"),
+            None => NOTHING_PLAYING_RESPONSE.to_owned(),
+        };
 
         self.sender
             .send(&request.message.target, &response)

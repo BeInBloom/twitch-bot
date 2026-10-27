@@ -22,28 +22,26 @@ pub struct RewardRedemption {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    ChatMessage(ChatMessage),
-    RewardRedemption(RewardRedemption),
+    ChatMessage(Box<ChatMessage>),
+    RewardRedemption(Box<RewardRedemption>),
 }
 
 impl Event {
-    pub fn user(&self) -> Option<&User> {
+    pub fn user(&self) -> &User {
         match self {
-            Event::ChatMessage(message) => Some(&message.author),
-            Event::RewardRedemption(redemption) => Some(&redemption.user),
+            Self::ChatMessage(message) => &message.author,
+            Self::RewardRedemption(redemption) => &redemption.user,
         }
     }
 
     pub fn chat_target(&self) -> Option<&ChatTarget> {
         match self {
-            Event::ChatMessage(message) => Some(&message.target),
-            Event::RewardRedemption(_) => None,
+            Self::ChatMessage(message) => Some(&message.target),
+            Self::RewardRedemption(_) => None,
         }
     }
 
     pub fn has_role(&self, required: Role) -> bool {
-        self.user()
-            .map(|user| user.role.contains(required))
-            .unwrap_or(false)
+        self.user().role.contains(required)
     }
 }

@@ -1,5 +1,4 @@
 use anyhow::Context;
-use async_trait::async_trait;
 use twitch_sdk::helix::HelixClient;
 
 use crate::{app::ports::MessageSink, model::ChatTarget};
@@ -18,12 +17,13 @@ impl TwitchChatSink {
     }
 }
 
-#[async_trait]
 impl MessageSink for TwitchChatSink {
     async fn send(&self, target: &ChatTarget, message: &str) -> anyhow::Result<()> {
-        self.helix
-            .send_chat_message(&target.broadcaster_id, &self.sender_id, message)
-            .await
-            .context("failed to send message")
+        Box::pin(
+            self.helix
+                .send_chat_message(&target.broadcaster_id, &self.sender_id, message),
+        )
+        .await
+        .context("failed to send message")
     }
 }

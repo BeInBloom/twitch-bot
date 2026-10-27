@@ -4,36 +4,60 @@ use twitch_sdk::event::{self as twitch, Badge};
 
 use crate::model::{ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, User};
 
-pub(crate) fn map_event(event: twitch::Event) -> Event {
-    match event {
-        twitch::Event::ChatMessage(message) => Event::ChatMessage(map_chat_message(message)),
-        twitch::Event::RewardRedemption(redemption) => {
-            Event::RewardRedemption(map_reward_redemption(redemption))
+impl From<twitch::Event> for Event {
+    fn from(event: twitch::Event) -> Self {
+        match event {
+            twitch::Event::ChatMessage(message) => Self::ChatMessage(Box::new((*message).into())),
+            twitch::Event::RewardRedemption(redemption) => {
+                Self::RewardRedemption(Box::new((*redemption).into()))
+            }
         }
     }
 }
 
-fn map_chat_message(message: twitch::ChatMessage) -> ChatMessage {
-    ChatMessage {
-        author: map_user(message.chatter, map_role(&message.badges)),
-        target: ChatTarget::new(message.broadcaster.id, message.broadcaster.login),
-        text: message.text,
-        received_at: SystemTime::now(),
+impl From<twitch::ChatMessage> for ChatMessage {
+    fn from(message: twitch::ChatMessage) -> Self {
+        Self {
+            author: user(message.chatter, Role::from(message.badges.as_slice())),
+            target: ChatTarget::new(message.broadcaster.id, message.broadcaster.login),
+            text: message.text,
+            received_at: SystemTime::now(),
+        }
     }
 }
 
-fn map_reward_redemption(redemption: twitch::RewardRedemption) -> RewardRedemption {
-    RewardRedemption {
-        user: map_user(redemption.user, Role::PLEB),
-        reward_id: redemption.reward.id,
-        reward_title: redemption.reward.title,
-        cost: redemption.reward.cost,
-        user_input: redemption.user_input,
-        received_at: SystemTime::now(),
+impl From<twitch::RewardRedemption> for RewardRedemption {
+    fn from(redemption: twitch::RewardRedemption) -> Self {
+        Self {
+            user: user(redemption.user, Role::PLEB),
+            reward_id: redemption.reward.id,
+            reward_title: redemption.reward.title,
+            cost: redemption.reward.cost,
+            user_input: redemption.user_input,
+            received_at: SystemTime::now(),
+        }
     }
 }
 
-fn map_user(user: twitch::User, role: Role) -> User {
+impl From<&[Badge]> for Role {
+    fn from(badges: &[Badge]) -> Self {
+        let has = |badge: Badge| badges.contains(&badge);
+
+        if has(Badge::Broadcaster) {
+            Self::BROADCASTER
+        } else if has(Badge::Moderator) {
+            Self::MODERATOR
+        } else if has(Badge::Vip) {
+            Self::VIP
+        } else if has(Badge::Subscriber) || has(Badge::Founder) {
+            Self::SUBSCRIBER
+        } else {
+            Self::PLEB
+        }
+    }
+}
+
+fn user(user: twitch::User, role: Role) -> User {
     User {
         id: user.id,
         display_name: user.display_name,
@@ -42,34 +66,24 @@ fn map_user(user: twitch::User, role: Role) -> User {
     }
 }
 
-fn map_role(badges: &[Badge]) -> Role {
-    let has = |badge: Badge| badges.contains(&badge);
-
-    if has(Badge::Broadcaster) {
-        Role::BROADCASTER
-    } else if has(Badge::Moderator) {
-        Role::MODERATOR
-    } else if has(Badge::Vip) {
-        Role::VIP
-    } else if has(Badge::Subscriber) || has(Badge::Founder) {
-        Role::SUBSCRIBER
-    } else {
-        Role::PLEB
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn maps_highest_badge_to_role() {
+    fn highest_badge_becomes_role() {
         assert_eq!(
-            map_role(&[Badge::Subscriber, Badge::Moderator]),
+            Role::from([Badge::Subscriber, Badge::Moderator].as_slice()),
             Role::MODERATOR
         );
-        assert_eq!(map_role(&[Badge::Broadcaster]), Role::BROADCASTER);
-        assert_eq!(map_role(&[Badge::Founder]), Role::SUBSCRIBER);
-        assert_eq!(map_role(&[Badge::Unknown("premium".into())]), Role::PLEB);
+        assert_eq!(
+            Role::from([Badge::Broadcaster].as_slice()),
+            Role::BROADCASTER
+        );
+        assert_eq!(Role::from([Badge::Founder].as_slice()), Role::SUBSCRIBER);
+        assert_eq!(
+            Role::from([Badge::Unknown("premium".into())].as_slice()),
+            Role::PLEB
+        );
     }
 }

@@ -8,7 +8,7 @@ pub struct WrapperValidationError {
 }
 
 impl WrapperValidationError {
-    pub fn new<T: Into<String>>(field: T, message: T) -> Self {
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             field: field.into(),
             message: message.into(),

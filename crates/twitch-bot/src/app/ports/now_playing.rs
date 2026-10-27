@@ -1,13 +1,11 @@
-use async_trait::async_trait;
+use std::future::Future;
 
 use crate::model::TrackInfo;
 
-#[async_trait]
 pub trait NowPlayingProvider: Send + Sync + 'static {
-    async fn current_track(&self) -> anyhow::Result<Option<TrackInfo>>;
+    fn current_track(&self) -> impl Future<Output = anyhow::Result<Option<TrackInfo>>> + Send;
 }
 
-#[async_trait]
 pub trait MusicSkipProvider: Send + Sync + 'static {
-    async fn skip(&self) -> anyhow::Result<()>;
+    fn skip(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
 }

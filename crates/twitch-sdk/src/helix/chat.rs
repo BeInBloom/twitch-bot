@@ -1,6 +1,8 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
-use super::client::{DataResponse, HelixClient};
+use super::client::{DataResponse, HelixClient, Json};
 use crate::{Error, Result};
 
 #[derive(Serialize)]
@@ -22,6 +24,12 @@ struct DropReason {
     message: String,
 }
 
+impl fmt::Display for DropReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
 impl HelixClient {
     pub async fn send_chat_message(
         &self,
@@ -29,7 +37,7 @@ impl HelixClient {
         sender_id: &str,
         message: &str,
     ) -> Result<()> {
-        let response: DataResponse<SentMessage> = self
+        let Json(DataResponse { data }) = self
             .post(
                 "/chat/messages",
                 &SendChatMessage {
@@ -40,11 +48,12 @@ impl HelixClient {
             )
             .await?;
 
-        match response.data.into_iter().find(|sent| !sent.is_sent) {
-            Some(dropped) => Err(Error::MessageDropped(dropped.drop_reason.map_or_else(
-                || "unknown reason".to_owned(),
-                |reason| format!("{}: {}", reason.code, reason.message),
-            ))),
+        match data.into_iter().find(|sent: &SentMessage| !sent.is_sent) {
+            Some(SentMessage {
+                drop_reason: Some(reason),
+                ..
+            }) => Err(Error::MessageDropped(reason.to_string())),
+            Some(_) => Err(Error::MessageDropped("unknown reason".to_owned())),
             None => Ok(()),
         }
     }
@@ -60,7 +69,7 @@ mod tests {
     use super::*;
     use crate::auth::AccessToken;
 
-    async fn helix(server: &MockServer) -> HelixClient {
+    fn helix(server: &MockServer) -> HelixClient {
         HelixClient::with_base_url("client", AccessToken::new("token").into(), server.uri())
             .unwrap()
     }
@@ -85,7 +94,6 @@ mod tests {
             .await;
 
         helix(&server)
-            .await
             .send_chat_message("1", "2", "hi")
             .await
             .unwrap();
@@ -105,7 +113,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = helix(&server).await.send_chat_message("1", "2", "hi").await;
+        let error = helix(&server).send_chat_message("1", "2", "hi").await;
 
         assert!(
             matches!(error, Err(Error::MessageDropped(reason)) if reason.contains("msg_duplicate"))
@@ -120,7 +128,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = helix(&server).await.send_chat_message("1", "2", "hi").await;
+        let error = helix(&server).send_chat_message("1", "2", "hi").await;
 
         assert!(matches!(
             error,
@@ -137,7 +145,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = helix(&server).await.send_chat_message("1", "2", "hi").await;
+        let error = helix(&server).send_chat_message("1", "2", "hi").await;
 
         assert!(matches!(error, Err(Error::Http { status: 401, .. })));
     }

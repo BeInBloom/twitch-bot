@@ -3,5 +3,4 @@ twitch:
     broadcaster_id: "..."
     client_id: "..."
     client_secret: "..."
-    refresh_token: "..."
     writer_id: "..."

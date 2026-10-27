@@ -1,14 +1,14 @@
-use std::{mem, sync::Mutex};
+use std::{
+    mem,
+    sync::{Mutex, PoisonError},
+};
 
 use anyhow::{Result, bail};
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tracing::info;
 use twitch_sdk::eventsub::{EventSub, EventSubHandle};
 
 use crate::{app::ports::EventSource, model::Event, runtime::Shutdowner};
-
-use super::mapper::map_event;
 
 const BUFFER_SIZE: usize = 100;
 
@@ -30,15 +30,11 @@ impl TwitchEventSubSource {
     }
 
     fn replace_state(&self, next: State) -> State {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         mem::replace(&mut *state, next)
     }
 }
 
-#[async_trait]
 impl EventSource for TwitchEventSubSource {
     async fn fetch(&self) -> Result<mpsc::Receiver<Event>> {
         let State::Ready(eventsub) = self.replace_state(State::Stopped) else {
@@ -51,7 +47,7 @@ impl EventSource for TwitchEventSubSource {
         let (tx, rx) = mpsc::channel(BUFFER_SIZE);
         tokio::spawn(async move {
             while let Some(event) = sdk_events.recv().await {
-                if tx.send(map_event(event)).await.is_err() {
+                if tx.send(Event::from(event)).await.is_err() {
                     info!("event receiver dropped");
                     break;
                 }
@@ -62,7 +58,6 @@ impl EventSource for TwitchEventSubSource {
     }
 }
 
-#[async_trait]
 impl Shutdowner for TwitchEventSubSource {
     async fn shutdown(&self) -> Result<()> {
         if let State::Running(handle) = self.replace_state(State::Stopped) {
