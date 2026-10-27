@@ -1,7 +1,4 @@
-use crate::{
-    app::command::{CommandInvocation, CommandName, CommandParser},
-    model::ChatMessage,
-};
+use crate::{app::command::Command, model::ChatMessage};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChatRequest {
@@ -11,7 +8,7 @@ pub(crate) enum ChatRequest {
 
 impl From<ChatMessage> for ChatRequest {
     fn from(message: ChatMessage) -> Self {
-        match CommandParser::parse_chat_text(&message.text) {
+        match Command::parse(&message.text) {
             Some(command) => Self::Command(CommandRequest { message, command }),
             None => Self::Plain(PlainMessageRequest { message }),
         }
@@ -26,11 +23,5 @@ pub(crate) struct PlainMessageRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct CommandRequest {
     pub message: ChatMessage,
-    pub command: CommandInvocation,
-}
-
-impl CommandRequest {
-    pub fn name(&self) -> &CommandName {
-        &self.command.name
-    }
+    pub command: Command,
 }

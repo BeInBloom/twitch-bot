@@ -1,74 +1,28 @@
-use std::sync::Arc;
-
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-
 use crate::app::dispatch::{
+    Handler,
     request::{ChatRequest, CommandRequest, PlainMessageRequest},
-    traits::{Handler, Interceptor, apply_interceptors},
 };
 
-pub(crate) struct ChatRouter {
-    plain_message_handler: Arc<dyn Handler<PlainMessageRequest>>,
-    command_handler: Arc<dyn Handler<CommandRequest>>,
+pub(crate) struct ChatRouter<P, C> {
+    plain: P,
+    command: C,
 }
 
-#[derive(Default)]
-pub(crate) struct ChatRouterBuilder {
-    plain_message_handler: Option<Arc<dyn Handler<PlainMessageRequest>>>,
-    command_handler: Option<Arc<dyn Handler<CommandRequest>>>,
-    interceptors: Vec<Arc<dyn Interceptor<ChatRequest>>>,
-}
-
-impl ChatRouter {
-    pub fn builder() -> ChatRouterBuilder {
-        ChatRouterBuilder::default()
+impl<P, C> ChatRouter<P, C> {
+    pub fn new(plain: P, command: C) -> Self {
+        Self { plain, command }
     }
 }
 
-impl ChatRouterBuilder {
-    #[allow(dead_code)]
-    pub fn interceptor(mut self, interceptor: Arc<dyn Interceptor<ChatRequest>>) -> Self {
-        self.interceptors.push(interceptor);
-        self
-    }
-
-    pub fn plain_message(mut self, handler: Arc<dyn Handler<PlainMessageRequest>>) -> Self {
-        self.plain_message_handler = Some(handler);
-        self
-    }
-
-    pub fn command(mut self, handler: Arc<dyn Handler<CommandRequest>>) -> Self {
-        self.command_handler = Some(handler);
-        self
-    }
-
-    pub fn build(self) -> Result<Arc<dyn Handler<ChatRequest>>> {
-        let Self {
-            plain_message_handler,
-            command_handler,
-            interceptors,
-        } = self;
-
-        let plain_message_handler =
-            plain_message_handler.context("chat router requires a plain message handler")?;
-        let command_handler = command_handler.context("chat router requires a command handler")?;
-
-        let router: Arc<dyn Handler<ChatRequest>> = Arc::new(ChatRouter {
-            plain_message_handler,
-            command_handler,
-        });
-
-        Ok(apply_interceptors(router, interceptors))
-    }
-}
-
-#[async_trait]
-impl Handler<ChatRequest> for ChatRouter {
+impl<P, C> Handler<ChatRequest> for ChatRouter<P, C>
+where
+    P: Handler<PlainMessageRequest>,
+    C: Handler<CommandRequest>,
+{
     async fn handle(&self, request: ChatRequest) -> anyhow::Result<()> {
         match request {
-            ChatRequest::Plain(request) => self.plain_message_handler.handle(request).await,
-            ChatRequest::Command(request) => self.command_handler.handle(request).await,
+            ChatRequest::Plain(request) => self.plain.handle(request).await,
+            ChatRequest::Command(request) => self.command.handle(request).await,
         }
     }
 }

@@ -3,7 +3,7 @@ mod command_router;
 mod event_router;
 pub(crate) mod request;
 mod reward_router;
-pub(crate) mod traits;
+mod traits;
 
 pub(crate) use chat_router::ChatRouter;
 pub(crate) use command_router::CommandRouter;

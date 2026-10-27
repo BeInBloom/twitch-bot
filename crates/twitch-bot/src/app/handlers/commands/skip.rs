@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use async_trait::async_trait;
 
 use crate::app::{
     dispatch::{Handler, request::CommandRequest},
@@ -22,7 +21,6 @@ impl<S, P> SkipHandler<S, P> {
     }
 }
 
-#[async_trait]
 impl<S, P> Handler<CommandRequest> for SkipHandler<S, P>
 where
     S: MessageSink,

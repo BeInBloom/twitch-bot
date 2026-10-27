@@ -1,3 +1,3 @@
-mod reward_redemption;
+mod unknown;
 
-pub(crate) use reward_redemption::RewardRedemptionHandler;
+pub(crate) use unknown::UnknownRewardHandler;

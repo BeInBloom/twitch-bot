@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use twitch_sdk::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
 
 use crate::model::{
-    ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, SystemEvent, User,
+    ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, UnsupportedEvent, User,
 };
 
 pub(crate) fn map_event(event: TwitchEvent) -> Event {
@@ -23,8 +23,8 @@ pub(crate) fn map_event(event: TwitchEvent) -> Event {
             user_input,
             received_at: SystemTime::now(),
         }),
-        _ => Event::System(SystemEvent {
-            message: "Unknown event type".to_string(),
+        _ => Event::Unsupported(UnsupportedEvent {
+            description: "unsupported twitch event".to_string(),
             received_at: SystemTime::now(),
         }),
     }
@@ -33,8 +33,8 @@ pub(crate) fn map_event(event: TwitchEvent) -> Event {
 fn map_chat_message(user: TwitchUser, target: TwitchChatTarget, text: String) -> Event {
     let user = map_user(user);
     let Some(target) = map_chat_target(target) else {
-        return Event::System(SystemEvent {
-            message: "Chat message arrived without a complete chat target".to_string(),
+        return Event::Unsupported(UnsupportedEvent {
+            description: "chat message without a complete chat target".to_string(),
             received_at: SystemTime::now(),
         });
     };

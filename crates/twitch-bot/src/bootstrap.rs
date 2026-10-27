@@ -6,65 +6,18 @@ use crate::{
         twitch::{TwitchChatSink, TwitchEventSubSource},
     },
     app::{
-        command::{MUSIC_COMMAND_NAME, SKIP_COMMAND_NAME},
-        dispatch::request::{ChatRequest, CommandRequest, RewardRequest},
-        dispatch::{ChatRouter, CommandRouter, EventRouter, Handler, RewardRouter},
+        dispatch::{ChatRouter, CommandRouter, EventRouter, RewardRouter},
         handlers::{
-            PlainMessageHandler, SystemHandler,
+            PlainMessageHandler, UnsupportedEventHandler,
             commands::{MusicHandler, SkipHandler, UnknownCommandHandler},
-            rewards::RewardRedemptionHandler,
+            rewards::UnknownRewardHandler,
         },
     },
     config::ConfigFile,
-    model::Event,
     runtime::{Consumer, Supervisor, UnixSignalHandler},
 };
 use tracing::error;
 use twitch_sdk::{TokenManager, auth::OnTokenRotation};
-
-fn build_command_router(
-    twitch_sender: Arc<TwitchChatSink>,
-    now_playing: Arc<PlayerctlNowPlayingProvider>,
-    skip_provider: Arc<PlayerctlSkipProvider>,
-) -> anyhow::Result<Arc<dyn Handler<CommandRequest>>> {
-    CommandRouter::builder()
-        .route(
-            MUSIC_COMMAND_NAME,
-            Arc::new(MusicHandler::new(twitch_sender.clone(), now_playing)),
-        )
-        .route(
-            SKIP_COMMAND_NAME,
-            Arc::new(SkipHandler::new(twitch_sender, skip_provider)),
-        )
-        .fallback(Arc::new(UnknownCommandHandler::new()))
-        .build()
-}
-
-fn build_chat_router(
-    command_router: Arc<dyn Handler<CommandRequest>>,
-) -> anyhow::Result<Arc<dyn Handler<ChatRequest>>> {
-    ChatRouter::builder()
-        .plain_message(Arc::new(PlainMessageHandler::new()))
-        .command(command_router)
-        .build()
-}
-
-fn build_reward_router() -> anyhow::Result<Arc<dyn Handler<RewardRequest>>> {
-    RewardRouter::builder()
-        .fallback(Arc::new(RewardRedemptionHandler::new()))
-        .build()
-}
-
-fn build_event_router(
-    chat_router: Arc<dyn Handler<ChatRequest>>,
-    reward_router: Arc<dyn Handler<RewardRequest>>,
-) -> anyhow::Result<Arc<dyn Handler<Event>>> {
-    EventRouter::builder()
-        .chat(chat_router)
-        .reward(reward_router)
-        .system(Arc::new(SystemHandler::new()))
-        .build()
-}
 
 fn persist_refresh_token(config_file: ConfigFile) -> OnTokenRotation {
     Box::new(move |token| {
@@ -91,16 +44,20 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         &config.twitch.auth,
         token_manager.clone(),
     )?);
-    let now_playing = Arc::new(PlayerctlNowPlayingProvider::new());
-    let skip_provider = Arc::new(PlayerctlSkipProvider::new());
 
-    let command_router =
-        build_command_router(twitch_sender.clone(), now_playing.clone(), skip_provider)?;
-    let chat_router = build_chat_router(command_router)?;
-    let reward_router = build_reward_router()?;
-    let event_router = build_event_router(chat_router, reward_router)?;
+    let commands = CommandRouter::new(
+        MusicHandler::new(
+            twitch_sender.clone(),
+            Arc::new(PlayerctlNowPlayingProvider::new()),
+        ),
+        SkipHandler::new(twitch_sender, Arc::new(PlayerctlSkipProvider::new())),
+        UnknownCommandHandler,
+    );
+    let chat = ChatRouter::new(PlainMessageHandler, commands);
+    let rewards = RewardRouter::new(UnknownRewardHandler);
+    let events = EventRouter::new(chat, rewards, UnsupportedEventHandler);
 
-    let consumer = Consumer::new(event_router);
+    let consumer = Consumer::new(events);
     let fetcher = TwitchEventSubSource::new(&config.twitch.auth, token_manager)?;
     let app = Supervisor::new(UnixSignalHandler::new(), fetcher, consumer);
 

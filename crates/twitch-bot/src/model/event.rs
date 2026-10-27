@@ -21,8 +21,8 @@ pub struct RewardRedemption {
 }
 
 #[derive(Debug, Clone)]
-pub struct SystemEvent {
-    pub message: String,
+pub struct UnsupportedEvent {
+    pub description: String,
     pub received_at: SystemTime,
 }
 
@@ -30,7 +30,7 @@ pub struct SystemEvent {
 pub enum Event {
     ChatMessage(ChatMessage),
     RewardRedemption(RewardRedemption),
-    System(SystemEvent),
+    Unsupported(UnsupportedEvent),
 }
 
 impl Event {
@@ -38,14 +38,14 @@ impl Event {
         match self {
             Event::ChatMessage(message) => Some(&message.author),
             Event::RewardRedemption(redemption) => Some(&redemption.user),
-            Event::System(_) => None,
+            Event::Unsupported(_) => None,
         }
     }
 
     pub fn chat_target(&self) -> Option<&ChatTarget> {
         match self {
             Event::ChatMessage(message) => Some(&message.target),
-            Event::RewardRedemption(_) | Event::System(_) => None,
+            Event::RewardRedemption(_) | Event::Unsupported(_) => None,
         }
     }
 

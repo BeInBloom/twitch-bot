@@ -1,89 +1,38 @@
-use std::sync::Arc;
-
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-
 use crate::{
     app::dispatch::{
-        request::{ChatRequest, RewardRequest, SystemRequest},
-        traits::{Handler, Interceptor, apply_interceptors},
+        Handler,
+        request::{ChatRequest, RewardRequest},
     },
-    model::Event,
+    model::{Event, UnsupportedEvent},
 };
 
-pub(crate) struct EventRouter {
-    chat_handler: Arc<dyn Handler<ChatRequest>>,
-    reward_handler: Arc<dyn Handler<RewardRequest>>,
-    system_handler: Arc<dyn Handler<SystemRequest>>,
+pub(crate) struct EventRouter<C, R, U> {
+    chat: C,
+    reward: R,
+    unsupported: U,
 }
 
-#[derive(Default)]
-pub(crate) struct EventRouterBuilder {
-    chat_handler: Option<Arc<dyn Handler<ChatRequest>>>,
-    reward_handler: Option<Arc<dyn Handler<RewardRequest>>>,
-    system_handler: Option<Arc<dyn Handler<SystemRequest>>>,
-    interceptors: Vec<Arc<dyn Interceptor<Event>>>,
-}
-
-impl EventRouter {
-    pub fn builder() -> EventRouterBuilder {
-        EventRouterBuilder::default()
+impl<C, R, U> EventRouter<C, R, U> {
+    pub fn new(chat: C, reward: R, unsupported: U) -> Self {
+        Self {
+            chat,
+            reward,
+            unsupported,
+        }
     }
 }
 
-impl EventRouterBuilder {
-    #[allow(dead_code)]
-    pub fn interceptor(mut self, interceptor: Arc<dyn Interceptor<Event>>) -> Self {
-        self.interceptors.push(interceptor);
-        self
-    }
-
-    pub fn chat(mut self, handler: Arc<dyn Handler<ChatRequest>>) -> Self {
-        self.chat_handler = Some(handler);
-        self
-    }
-
-    pub fn reward(mut self, handler: Arc<dyn Handler<RewardRequest>>) -> Self {
-        self.reward_handler = Some(handler);
-        self
-    }
-
-    pub fn system(mut self, handler: Arc<dyn Handler<SystemRequest>>) -> Self {
-        self.system_handler = Some(handler);
-        self
-    }
-
-    pub fn build(self) -> Result<Arc<dyn Handler<Event>>> {
-        let Self {
-            chat_handler,
-            reward_handler,
-            system_handler,
-            interceptors,
-        } = self;
-
-        let chat_handler = chat_handler.context("event router requires a chat handler")?;
-        let reward_handler = reward_handler.context("event router requires a reward handler")?;
-        let system_handler = system_handler.context("event router requires a system handler")?;
-
-        let router: Arc<dyn Handler<Event>> = Arc::new(EventRouter {
-            chat_handler,
-            reward_handler,
-            system_handler,
-        });
-
-        Ok(apply_interceptors(router, interceptors))
-    }
-}
-
-#[async_trait]
-impl Handler<Event> for EventRouter {
+impl<C, R, U> Handler<Event> for EventRouter<C, R, U>
+where
+    C: Handler<ChatRequest>,
+    R: Handler<RewardRequest>,
+    U: Handler<UnsupportedEvent>,
+{
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
         match event {
-            Event::ChatMessage(message) => self.chat_handler.handle(message.into()).await,
-            Event::RewardRedemption(redemption) => {
-                self.reward_handler.handle(redemption.into()).await
-            }
-            Event::System(event) => self.system_handler.handle(event.into()).await,
+            Event::ChatMessage(message) => self.chat.handle(message.into()).await,
+            Event::RewardRedemption(redemption) => self.reward.handle(redemption.into()).await,
+            Event::Unsupported(event) => self.unsupported.handle(event).await,
         }
     }
 }
