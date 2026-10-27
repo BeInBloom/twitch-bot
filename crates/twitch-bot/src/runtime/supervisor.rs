@@ -1,67 +1,40 @@
-use std::time::Duration;
+use std::{error::Error, future::Future, time::Duration};
 
 use tokio::time::timeout;
+use tokio_stream::Stream;
 use tracing::{error, info};
 
-use crate::app::ports::EventSource;
-
-use super::{EventConsumer, Shutdowner, SignalHandler};
+use super::{Consumer, signal::wait_for_shutdown};
+use crate::{app::dispatch::Handler, model::Event};
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub struct Supervisor<S, F, C> {
-    signal_handler: S,
-    fetcher: F,
-    consumer: C,
-}
-
-impl<S, F, C> Supervisor<S, F, C>
+pub async fn run_until_shutdown<H, E>(
+    events: impl Stream<Item = Event> + Send + Unpin + 'static,
+    consumer: Consumer<H>,
+    stop_events: impl Future<Output = Result<(), E>>,
+) -> anyhow::Result<()>
 where
-    S: SignalHandler,
-    F: EventSource + Shutdowner,
-    C: EventConsumer,
+    H: Handler<Event>,
+    E: Error,
 {
-    pub fn new(signal_handler: S, fetcher: F, consumer: C) -> Self {
-        Self {
-            signal_handler,
-            fetcher,
-            consumer,
-        }
+    info!("app running...");
+    let consuming = tokio::spawn(consumer.consume(events));
+
+    let signal = wait_for_shutdown().await;
+    info!("received {signal}, stopping");
+
+    if let Err(error) = stop_events.await {
+        error!("event source stopped with an error: {error}");
     }
 
-    pub async fn run(self) -> anyhow::Result<()> {
-        info!("app running...");
-
-        let Self {
-            signal_handler,
-            fetcher,
-            consumer,
-        } = self;
-
-        let event_ch = fetcher.fetch().await?;
-        let handle = tokio::spawn(async move {
-            consumer.consume(event_ch).await;
-        });
-
-        wait_for_signals(signal_handler).await;
-
-        fetcher.shutdown().await?;
-
-        match timeout(SHUTDOWN_TIMEOUT, handle).await {
-            Ok(res) => {
-                info!("graceful shutdown complete");
-                res?;
-            }
-            Err(_) => {
-                error!("shutdown timeout exceeded, forcing exit");
-            }
+    match timeout(SHUTDOWN_TIMEOUT, consuming).await {
+        Ok(result) => {
+            result?;
+            info!("graceful shutdown complete");
         }
-
-        Ok(())
+        Err(_) => error!("shutdown timeout exceeded, forcing exit"),
     }
-}
 
-async fn wait_for_signals<S: SignalHandler>(handler: S) {
-    let signal = handler.wait_for_shutdown().await;
-    info!("received signal {}, stopping", signal);
+    Ok(())
 }

@@ -1,8 +1,6 @@
-use std::time::SystemTime;
-
 use twitch_sdk::event::{self as twitch, Badge};
 
-use crate::model::{ChatMessage, ChatTarget, Event, Platform, RewardRedemption, Role, User};
+use crate::model::{ChatMessage, ChatTarget, Event, RewardRedemption, Role, User};
 
 impl From<twitch::Event> for Event {
     fn from(event: twitch::Event) -> Self {
@@ -18,10 +16,17 @@ impl From<twitch::Event> for Event {
 impl From<twitch::ChatMessage> for ChatMessage {
     fn from(message: twitch::ChatMessage) -> Self {
         Self {
-            author: user(message.chatter, Role::from(message.badges.as_slice())),
-            target: ChatTarget::new(message.broadcaster.id, message.broadcaster.login),
+            author_role: message
+                .badges
+                .iter()
+                .map(Role::from)
+                .max()
+                .unwrap_or_default(),
+            author: message.chatter.into(),
+            target: ChatTarget {
+                broadcaster_id: message.broadcaster.id,
+            },
             text: message.text,
-            received_at: SystemTime::now(),
         }
     }
 }
@@ -29,40 +34,33 @@ impl From<twitch::ChatMessage> for ChatMessage {
 impl From<twitch::RewardRedemption> for RewardRedemption {
     fn from(redemption: twitch::RewardRedemption) -> Self {
         Self {
-            user: user(redemption.user, Role::PLEB),
+            user: redemption.user.into(),
             reward_id: redemption.reward.id,
             reward_title: redemption.reward.title,
             cost: redemption.reward.cost,
             user_input: redemption.user_input,
-            received_at: SystemTime::now(),
         }
     }
 }
 
-impl From<&[Badge]> for Role {
-    fn from(badges: &[Badge]) -> Self {
-        let has = |badge: Badge| badges.contains(&badge);
-
-        if has(Badge::Broadcaster) {
-            Self::BROADCASTER
-        } else if has(Badge::Moderator) {
-            Self::MODERATOR
-        } else if has(Badge::Vip) {
-            Self::VIP
-        } else if has(Badge::Subscriber) || has(Badge::Founder) {
-            Self::SUBSCRIBER
-        } else {
-            Self::PLEB
+impl From<twitch::User> for User {
+    fn from(user: twitch::User) -> Self {
+        Self {
+            id: user.id,
+            display_name: user.display_name,
         }
     }
 }
 
-fn user(user: twitch::User, role: Role) -> User {
-    User {
-        id: user.id,
-        display_name: user.display_name,
-        platform: Platform::Twitch,
-        role,
+impl From<&Badge> for Role {
+    fn from(badge: &Badge) -> Self {
+        match badge {
+            Badge::Broadcaster => Self::Broadcaster,
+            Badge::Moderator => Self::Moderator,
+            Badge::Vip => Self::Vip,
+            Badge::Subscriber | Badge::Founder => Self::Subscriber,
+            Badge::Unknown(_) => Self::Viewer,
+        }
     }
 }
 
@@ -70,20 +68,19 @@ fn user(user: twitch::User, role: Role) -> User {
 mod tests {
     use super::*;
 
+    fn role(badges: &[Badge]) -> Role {
+        badges.iter().map(Role::from).max().unwrap_or_default()
+    }
+
     #[test]
     fn highest_badge_becomes_role() {
         assert_eq!(
-            Role::from([Badge::Subscriber, Badge::Moderator].as_slice()),
-            Role::MODERATOR
+            role(&[Badge::Subscriber, Badge::Moderator]),
+            Role::Moderator
         );
-        assert_eq!(
-            Role::from([Badge::Broadcaster].as_slice()),
-            Role::BROADCASTER
-        );
-        assert_eq!(Role::from([Badge::Founder].as_slice()), Role::SUBSCRIBER);
-        assert_eq!(
-            Role::from([Badge::Unknown("premium".into())].as_slice()),
-            Role::PLEB
-        );
+        assert_eq!(role(&[Badge::Broadcaster]), Role::Broadcaster);
+        assert_eq!(role(&[Badge::Founder]), Role::Subscriber);
+        assert_eq!(role(&[Badge::Unknown("premium".into())]), Role::Viewer);
+        assert_eq!(role(&[]), Role::Viewer);
     }
 }

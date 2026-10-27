@@ -5,10 +5,8 @@ edition.workspace = true
 
 [dependencies]
 twitch-sdk = { path = "../twitch-sdk" }
-macros = { path = "../macros" }
-macros-core = { path = "../macros-core" }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio-stream = "0.1.17"
 anyhow = { workspace = true }
 thiserror.workspace = true
 tracing = { workspace = true }

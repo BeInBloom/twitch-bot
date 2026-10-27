@@ -3,6 +3,7 @@ use twitch_sdk::helix::HelixClient;
 
 use crate::{app::ports::MessageSink, model::ChatTarget};
 
+#[derive(Clone)]
 pub struct TwitchChatSink {
     helix: HelixClient,
     sender_id: String,

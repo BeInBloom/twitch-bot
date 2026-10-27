@@ -1,11 +1,9 @@
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackInfo {
     pub artist: String,
-    pub album: Option<String>,
     pub title: String,
-    pub url: Option<String>,
 }
 
 impl fmt::Display for TrackInfo {

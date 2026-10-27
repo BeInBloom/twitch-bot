@@ -36,16 +36,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, Mutex},
-        time::SystemTime,
-    };
+    use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::{
-        app::dispatch::request::ChatRequest,
-        model::{ChatMessage, ChatTarget, Platform, Role, User},
-    };
 
     type Calls = Arc<Mutex<Vec<&'static str>>>;
 
@@ -61,25 +54,6 @@ mod tests {
         }
     }
 
-    fn command(text: &str) -> CommandRequest {
-        let message = ChatMessage {
-            author: User {
-                id: "1".into(),
-                display_name: "user".into(),
-                platform: Platform::Twitch,
-                role: Role::PLEB,
-            },
-            target: ChatTarget::new("1", "channel"),
-            text: text.into(),
-            received_at: SystemTime::now(),
-        };
-
-        match ChatRequest::from(Box::new(message)) {
-            ChatRequest::Command(request) => request,
-            ChatRequest::Plain(_) => panic!("{text} is not a command"),
-        }
-    }
-
     #[tokio::test]
     async fn dispatches_each_command_to_its_handler() {
         let calls = Calls::default();
@@ -90,7 +64,10 @@ mod tests {
         let router = CommandRouter::new(handler("music"), handler("skip"), handler("unknown"));
 
         for text in ["!music", "!skip", "!discord"] {
-            router.handle(command(text)).await.unwrap();
+            router
+                .handle(CommandRequest::from_viewer(text))
+                .await
+                .unwrap();
         }
 
         assert_eq!(*calls.lock().unwrap(), ["music", "skip", "unknown"]);

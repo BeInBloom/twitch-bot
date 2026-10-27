@@ -9,6 +9,9 @@ impl Handler<RewardRequest> for UnknownRewardHandler {
         info!(
             reward_id = %request.redemption.reward_id,
             reward_title = %request.redemption.reward_title,
+            cost = request.redemption.cost,
+            user_input = ?request.redemption.user_input,
+            user_id = %request.redemption.user.id,
             user = %request.redemption.user.display_name,
             "received unknown reward redemption"
         );

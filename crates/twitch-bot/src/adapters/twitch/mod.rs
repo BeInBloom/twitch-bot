@@ -1,6 +1,6 @@
 mod chat_sink;
-mod eventsub_source;
+mod event_stream;
 mod mapper;
 
 pub use chat_sink::TwitchChatSink;
-pub use eventsub_source::TwitchEventSubSource;
+pub use event_stream::start_events;

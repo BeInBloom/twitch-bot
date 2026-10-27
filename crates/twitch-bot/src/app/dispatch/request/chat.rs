@@ -28,3 +28,13 @@ pub(crate) struct CommandRequest {
     pub message: Box<ChatMessage>,
     pub command: Command,
 }
+
+#[cfg(test)]
+impl CommandRequest {
+    pub fn from_viewer(text: &str) -> Self {
+        match ChatRequest::from(Box::new(ChatMessage::from_viewer(text))) {
+            ChatRequest::Command(request) => request,
+            ChatRequest::Plain(_) => panic!("{text} is not a command"),
+        }
+    }
+}

@@ -1,22 +1,22 @@
-use std::{fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 use crate::config::{Config, ConfigError};
 
+const CONFIG_PATH_ENV: &str = "TWITCH_BOT_CONFIG";
 const DEFAULT_CONFIG_PATH: &str = "./config.yaml";
 
 pub(crate) struct ConfigFile {
     path: PathBuf,
 }
 
-impl Default for ConfigFile {
-    fn default() -> Self {
+impl ConfigFile {
+    pub fn from_env() -> Self {
         Self {
-            path: PathBuf::from(DEFAULT_CONFIG_PATH),
+            path: env::var_os(CONFIG_PATH_ENV)
+                .map_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH), PathBuf::from),
         }
     }
-}
 
-impl ConfigFile {
     pub fn load(&self) -> Result<Config, ConfigError> {
         let content = fs::read_to_string(&self.path).map_err(|source| ConfigError::Io {
             path: self.path.display().to_string(),
