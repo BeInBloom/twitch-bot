@@ -3,10 +3,6 @@ name = "twitch-sdk"
 version = "0.1.0"
 edition.workspace = true
 
-[features]
-default = []
-test-support = []
-
 [dependencies]
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -15,9 +11,8 @@ futures-util = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-twitch-sdk = { path = ".", features = ["test-support"] }
+wiremock = "0.6.5"

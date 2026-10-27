@@ -1,31 +1,28 @@
 use anyhow::Context;
 use async_trait::async_trait;
-use std::sync::Arc;
-use twitch_sdk::TokenManager;
-use twitch_sdk::chat::sender::HelixSender;
+use twitch_sdk::helix::HelixClient;
 
-use crate::{app::ports::MessageSink, config::model::TwitchAuth, model::ChatTarget};
+use crate::{app::ports::MessageSink, model::ChatTarget};
 
-#[non_exhaustive]
 pub struct TwitchChatSink {
-    sender: HelixSender,
+    helix: HelixClient,
+    sender_id: String,
 }
 
 impl TwitchChatSink {
-    pub fn new(config: &TwitchAuth, token_manager: Arc<TokenManager>) -> anyhow::Result<Self> {
-        let writer_id = config.writer_id.as_str();
-        let client_id = config.client_id.as_str();
-
-        let sender = HelixSender::new(writer_id, client_id, token_manager)?;
-        Ok(Self { sender })
+    pub fn new(helix: HelixClient, sender_id: impl Into<String>) -> Self {
+        Self {
+            helix,
+            sender_id: sender_id.into(),
+        }
     }
 }
 
 #[async_trait]
 impl MessageSink for TwitchChatSink {
     async fn send(&self, target: &ChatTarget, message: &str) -> anyhow::Result<()> {
-        self.sender
-            .send(&target.broadcaster_id, message)
+        self.helix
+            .send_chat_message(&target.broadcaster_id, &self.sender_id, message)
             .await
             .context("failed to send message")
     }

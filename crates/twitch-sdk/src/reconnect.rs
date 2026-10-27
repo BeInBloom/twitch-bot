@@ -1,9 +1,10 @@
 use std::{future::Future, time::Duration};
 
-use anyhow::Result;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+use crate::{Error, Result};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
@@ -27,12 +28,16 @@ where
             };
 
             match result {
+                Err(Error::ReceiverDropped) => {
+                    info!("{name} events receiver dropped");
+                    break;
+                }
                 Ok(()) => warn!(
                     "{name} connection closed. reconnecting in {}s...",
                     RECONNECT_DELAY.as_secs()
                 ),
                 Err(e) => error!(
-                    "{name} connection lost: {e:?}. reconnecting in {}s...",
+                    "{name} connection lost: {e}. reconnecting in {}s...",
                     RECONNECT_DELAY.as_secs()
                 ),
             }

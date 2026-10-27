@@ -3,36 +3,29 @@ use crate::{
         Handler,
         request::{ChatRequest, RewardRequest},
     },
-    model::{Event, UnsupportedEvent},
+    model::Event,
 };
 
-pub(crate) struct EventRouter<C, R, U> {
+pub(crate) struct EventRouter<C, R> {
     chat: C,
     reward: R,
-    unsupported: U,
 }
 
-impl<C, R, U> EventRouter<C, R, U> {
-    pub fn new(chat: C, reward: R, unsupported: U) -> Self {
-        Self {
-            chat,
-            reward,
-            unsupported,
-        }
+impl<C, R> EventRouter<C, R> {
+    pub fn new(chat: C, reward: R) -> Self {
+        Self { chat, reward }
     }
 }
 
-impl<C, R, U> Handler<Event> for EventRouter<C, R, U>
+impl<C, R> Handler<Event> for EventRouter<C, R>
 where
     C: Handler<ChatRequest>,
     R: Handler<RewardRequest>,
-    U: Handler<UnsupportedEvent>,
 {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
         match event {
             Event::ChatMessage(message) => self.chat.handle(message.into()).await,
             Event::RewardRedemption(redemption) => self.reward.handle(redemption.into()).await,
-            Event::Unsupported(event) => self.unsupported.handle(event).await,
         }
     }
 }

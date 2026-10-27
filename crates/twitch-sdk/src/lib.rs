@@ -1,9 +1,9 @@
 pub mod auth;
-pub mod chat;
+pub mod error;
+pub mod event;
 pub mod eventsub;
-pub mod model;
+pub mod helix;
+mod http;
 mod reconnect;
 
-pub use auth::TokenManager;
-pub use eventsub::EventSubClient;
-pub use model::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
+pub use error::{Error, Result};

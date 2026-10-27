@@ -1,4 +1,8 @@
 mod client;
-mod protocol;
+mod dedup;
+mod session;
+mod subscription;
+mod wire;
 
-pub use client::EventSubClient;
+pub use client::{EventSub, EventSubHandle};
+pub use subscription::Subscription;

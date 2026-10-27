@@ -1,3 +1,5 @@
-mod token_manager;
+mod source;
+mod token;
 
-pub use token_manager::{OnTokenRotation, TokenManager};
+pub use source::{OnTokenRotation, RefreshingToken, TokenSource};
+pub use token::AccessToken;
