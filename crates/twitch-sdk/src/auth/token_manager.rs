@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 const REFRESH_BUFFER_SECS: u64 = 600;
@@ -129,7 +129,8 @@ impl TokenManager {
             .await
             .context("failed to parse token response")?;
 
-        let full_token = format!("oauth:{}", response.access_token);
+        debug!(access_token = %response.access_token, "access token refreshed");
+        let full_token = response.access_token;
 
         {
             let mut lock = self.current_token.write().await;
@@ -186,13 +187,11 @@ mod tests {
     async fn test_get_token_returns_cached_when_present() {
         let manager = make_manager();
 
-        manager
-            .set_token_for_test("oauth:cached_token".to_string())
-            .await;
+        manager.set_token_for_test("cached_token".to_string()).await;
 
         let result = manager.get_token().await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "oauth:cached_token");
+        assert_eq!(result.unwrap(), "cached_token");
     }
 
     #[tokio::test]
@@ -225,9 +224,7 @@ mod tests {
     async fn test_race_condition_prevention_with_cached_token() {
         let manager = Arc::new(make_manager());
 
-        manager
-            .set_token_for_test("oauth:test123".to_string())
-            .await;
+        manager.set_token_for_test("test123".to_string()).await;
 
         let mut handles = vec![];
         for _ in 0..10 {
@@ -238,7 +235,7 @@ mod tests {
         for handle in handles {
             let result = handle.await.unwrap();
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), "oauth:test123");
+            assert_eq!(result.unwrap(), "test123");
         }
     }
 }

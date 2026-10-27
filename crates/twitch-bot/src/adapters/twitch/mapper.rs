@@ -31,26 +31,12 @@ pub(crate) fn map_event(event: TwitchEvent) -> Event {
 }
 
 fn map_chat_message(user: TwitchUser, target: TwitchChatTarget, text: String) -> Event {
-    let user = map_user(user);
-    let Some(target) = map_chat_target(target) else {
-        return Event::Unsupported(UnsupportedEvent {
-            description: "chat message without a complete chat target".to_string(),
-            received_at: SystemTime::now(),
-        });
-    };
-
     Event::ChatMessage(ChatMessage {
-        author: user,
-        target,
+        author: map_user(user),
+        target: ChatTarget::new(target.broadcaster_id, target.channel_login),
         text,
         received_at: SystemTime::now(),
     })
-}
-
-fn map_chat_target(target: TwitchChatTarget) -> Option<ChatTarget> {
-    let broadcaster_id = target.broadcaster_id?;
-    let channel_login = target.channel_login?;
-    Some(ChatTarget::new(broadcaster_id, channel_login))
 }
 
 fn map_user(user: TwitchUser) -> User {
@@ -85,18 +71,5 @@ mod tests {
         assert_eq!(map_role(moderator_and_subscriber), Role::MODERATOR);
         assert_eq!(map_role(TwitchRole::BROADCASTER), Role::BROADCASTER);
         assert_eq!(map_role(TwitchRole::empty()), Role::PLEB);
-    }
-
-    #[test]
-    fn chat_target_requires_broadcaster_id_and_login() {
-        let mut target = TwitchChatTarget::default();
-        target.channel_login = Some("channel".into());
-        assert!(map_chat_target(target.clone()).is_none());
-
-        target.broadcaster_id = Some("1".into());
-        assert_eq!(
-            map_chat_target(target),
-            Some(ChatTarget::new("1", "channel"))
-        );
     }
 }

@@ -163,8 +163,7 @@ impl Subscriber {
         sub_type: &str,
         condition: serde_json::Value,
     ) -> Result<()> {
-        let token = self.token_manager.get_token().await?;
-        let access_token = token.strip_prefix("oauth:").unwrap_or(&token);
+        let access_token = self.token_manager.get_token().await?;
 
         let request = SubscriptionRequest {
             sub_type,
@@ -391,8 +390,8 @@ fn map_chat_message(chat_msg: ChatMessageEvent) -> TwitchEvent {
             role: determine_role_from_badges(&chat_msg.badges),
         },
         target: TwitchChatTarget {
-            broadcaster_id: Some(chat_msg.broadcaster_user_id),
-            channel_login: Some(chat_msg.broadcaster_user_login),
+            broadcaster_id: chat_msg.broadcaster_user_id,
+            channel_login: chat_msg.broadcaster_user_login,
         },
         text: chat_msg.message.text,
     }

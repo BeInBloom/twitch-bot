@@ -1584,7 +1584,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "twitch-sdk",
- "url",
 ]
 
 [[package]]

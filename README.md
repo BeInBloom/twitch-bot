@@ -220,10 +220,6 @@ Lint:
 cargo clippy --workspace --all-targets
 ```
 
-Notes:
-
-- `twitch-sdk` has IRC integration tests
-- these tests use local sockets and may require a less restricted environment than a sandboxed runner
 
 ## Current limitations
 

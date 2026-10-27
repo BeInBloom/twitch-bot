@@ -62,8 +62,7 @@ impl HelixSender {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<Response, SenderError> {
-        let token = self.token_manager.get_token().await?;
-        let access_token = token.strip_prefix("oauth:").unwrap_or(&token);
+        let access_token = self.token_manager.get_token().await?;
 
         Ok(self
             .client
