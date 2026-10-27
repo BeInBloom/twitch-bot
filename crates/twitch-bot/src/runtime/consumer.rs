@@ -13,14 +13,17 @@ pub struct Consumer<H> {
     handler: Arc<H>,
 }
 
-impl<H: Handler<Event>> Consumer<H> {
+impl<H> Consumer<H> {
     pub fn new(handler: H) -> Self {
         Self {
             handler: Arc::new(handler),
         }
     }
 
-    pub async fn consume(self, mut events: impl Stream<Item = Event> + Unpin) {
+    pub async fn consume(self, mut events: impl Stream<Item = Event> + Unpin)
+    where
+        H: Handler<Event>,
+    {
         let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS as usize));
 
         while let Some(event) = events.next().await {

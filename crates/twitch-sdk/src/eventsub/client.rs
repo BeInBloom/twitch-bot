@@ -7,14 +7,24 @@ use tokio::{
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::info;
 
-use super::{dedup::RecentIds, session::Session, subscription::Subscription};
-use crate::{Result, event::Event, helix::HelixClient, reconnect::spawn_reconnecting};
+use super::{
+    dedup::RecentIds,
+    error::EventSubError,
+    session::{Session, SessionEnd},
+    subscription::Subscription,
+};
+use crate::{
+    event::Event,
+    helix::{Conduit, HelixClient},
+    reconnect::spawn_reconnecting,
+};
 
 const EVENTSUB_WS_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const CHANNEL_BUFFER_SIZE: usize = 100;
 const RECENT_IDS_CAPACITY: usize = 100;
-const SHARD_COUNT: u32 = 1;
 const SHARD_ID: &str = "0";
+
+struct ReceiverGone;
 
 pub struct EventSub {
     helix: HelixClient,
@@ -57,7 +67,7 @@ impl EventSub {
         )
     }
 
-    async fn run(&self, events: &mpsc::Sender<Event>) -> Result<()> {
+    async fn run(&self, events: &mpsc::Sender<Event>) -> Result<ReceiverGone, EventSubError> {
         let conduit_id = self.prepare_conduit().await?;
 
         let mut session = Box::pin(Session::connect(&self.websocket_url)).await?;
@@ -66,7 +76,11 @@ impl EventSub {
         let mut recent = RecentIds::new(RECENT_IDS_CAPACITY);
 
         loop {
-            let reconnect_url = session.run_until_reconnect(events, &mut recent).await?;
+            let SessionEnd::Reconnect { url: reconnect_url } =
+                session.run(events, &mut recent).await?
+            else {
+                return Ok(ReceiverGone);
+            };
 
             // Старое соединение должно жить, пока новое не получит welcome,
             // поэтому session заменяется только после connect и привязки к шарду.
@@ -76,17 +90,17 @@ impl EventSub {
         }
     }
 
-    async fn prepare_conduit(&self) -> Result<String> {
+    async fn prepare_conduit(&self) -> Result<String, EventSubError> {
         let existing = self
             .helix
             .conduits()
             .await?
             .into_iter()
-            .find(|conduit| conduit.shard_count == SHARD_COUNT);
+            .find(Conduit::has_single_shard);
 
         let conduit = match existing {
             Some(conduit) => conduit,
-            None => self.helix.create_conduit(SHARD_COUNT).await?,
+            None => self.helix.create_single_shard_conduit().await?,
         };
         info!("using EventSub conduit {}", conduit.id);
 
@@ -98,7 +112,7 @@ impl EventSub {
         Ok(conduit.id)
     }
 
-    async fn attach(&self, conduit_id: &str, session: &Session) -> Result<()> {
+    async fn attach(&self, conduit_id: &str, session: &Session) -> Result<(), EventSubError> {
         Box::pin(
             self.helix
                 .assign_websocket_shard(conduit_id, SHARD_ID, session.id()),

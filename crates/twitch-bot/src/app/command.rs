@@ -17,11 +17,11 @@ impl FromStr for Command {
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         let rest = text.strip_prefix(COMMAND_PREFIX).ok_or(NotACommand)?;
-        if rest.starts_with(char::is_whitespace) {
+        let (name, _args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+
+        if name.is_empty() {
             return Err(NotACommand);
         }
-
-        let name = rest.split_whitespace().next().ok_or(NotACommand)?;
 
         Ok(match name {
             "music" => Self::Music,

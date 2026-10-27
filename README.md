@@ -149,24 +149,28 @@ Layers depend in one direction: `eventsub → helix → auth`.
 ```text
 crates/twitch-sdk/src/
 ├── auth/
+│   ├── error.rs         TokenError
 │   ├── token.rs         AccessToken
 │   └── source.rs        TokenSource { Static, ClientCredentials }: app access token in memory, re-requested before expiry or after 401; TokenEvent for the consumer to log
 ├── helix/
 │   ├── client.rs        HTTP transport: GET/POST/PATCH, headers, retry once on 401, response → TryFrom
-│   ├── chat.rs          send_chat_message
-│   └── eventsub.rs      conduits, create_conduit, assign_websocket_shard, subscribe
+│   ├── error.rs         ApiError: token, request, status, rate limit, decode
+│   ├── chat.rs          send_chat_message → SendMessageError { Api, Dropped(DropReason) }
+│   └── eventsub.rs      conduits, create_single_shard_conduit, assign_websocket_shard (ConduitError), subscribe
 ├── eventsub/
 │   ├── subscription.rs  Subscription enum → type, version, condition
 │   ├── wire.rs          Twitch JSON → Frame and public events
 │   ├── session.rs       one WebSocket connection: welcome, keepalive, notification, reconnect, revocation
+│   ├── error.rs         EventSubError (internal: handled by the reconnect loop)
 │   ├── dedup.rs         recent message ids
 │   └── client.rs        conduit + shard attachment, EventSub::spawn → (Receiver<Event>, EventSubHandle)
 ├── event.rs             public events
-├── error.rs             typed Error
 └── reconnect.rs         retry delay and cancellation
 ```
 
 Adding a subscription touches `Subscription`, `wire` and `event`; exhaustive `match` in each makes it impossible to miss one.
+
+Every public operation returns only the errors it can produce: `TokenSource::access_token` → `TokenError`, `send_chat_message` → `SendMessageError`. Lower-level errors are wrapped with `#[from]`, so `?` converts them. EventSub errors never leave the crate: the reconnect loop logs them and reconnects.
 
 ## Configuration
 

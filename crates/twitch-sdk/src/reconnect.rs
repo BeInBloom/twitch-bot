@@ -1,21 +1,23 @@
-use std::{future::Future, time::Duration};
+use std::{fmt::Display, future::Future, time::Duration};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
-
-use crate::{Error, Result};
+use tracing::{error, info};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-pub(crate) fn spawn_reconnecting<F, Fut>(
+/// Runs `run_connection` until it finishes successfully or is cancelled,
+/// reconnecting after every error.
+pub(crate) fn spawn_reconnecting<F, Fut, T, E>(
     name: &'static str,
     cancel: CancellationToken,
     mut run_connection: F,
 ) -> JoinHandle<()>
 where
     F: FnMut() -> Fut + Send + 'static,
-    Fut: Future<Output = Result<()>> + Send,
+    Fut: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: Display + Send,
 {
     tokio::spawn(async move {
         info!("starting {name} client lifecycle...");
@@ -27,20 +29,13 @@ where
                 result = run_connection() => result,
             };
 
-            match result {
-                Err(Error::ReceiverDropped) => {
-                    info!("{name} events receiver dropped");
-                    break;
-                }
-                Ok(()) => warn!(
-                    "{name} connection closed. reconnecting in {}s...",
-                    RECONNECT_DELAY.as_secs()
-                ),
-                Err(e) => error!(
-                    "{name} connection lost: {e}. reconnecting in {}s...",
-                    RECONNECT_DELAY.as_secs()
-                ),
-            }
+            let Err(error) = result else {
+                break;
+            };
+            error!(
+                "{name} connection lost: {error}. reconnecting in {}s...",
+                RECONNECT_DELAY.as_secs()
+            );
 
             tokio::select! {
                 () = cancel.cancelled() => break,

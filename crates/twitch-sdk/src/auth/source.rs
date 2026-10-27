@@ -4,11 +4,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use tokio::{sync::Mutex, time::Instant};
 
-use super::AccessToken;
-use crate::{
-    Error, Result,
-    http::{self, HttpResponse},
-};
+use super::{AccessToken, TokenError};
+use crate::http::{self, HttpResponse};
 
 const OAUTH_URL: &str = "https://id.twitch.tv/oauth2";
 const REFRESH_MARGIN: Duration = Duration::from_secs(600);
@@ -29,7 +26,7 @@ pub enum TokenSource {
 }
 
 impl TokenSource {
-    pub async fn access_token(&self) -> Result<AccessToken> {
+    pub async fn access_token(&self) -> Result<AccessToken, TokenError> {
         match self {
             Self::Static(token) => Ok(token.clone()),
             Self::ClientCredentials(source) => source.access_token().await,
@@ -82,14 +79,14 @@ struct TokenGrant {
 }
 
 impl TryFrom<HttpResponse> for TokenGrant {
-    type Error = Error;
+    type Error = TokenError;
 
-    fn try_from(response: HttpResponse) -> Result<Self> {
-        if response.status.is_success() {
-            return response.json();
+    fn try_from(response: HttpResponse) -> Result<Self, TokenError> {
+        if response.is_success() {
+            return Ok(response.json()?);
         }
 
-        Err(Error::Auth {
+        Err(TokenError::Rejected {
             status: response.status.as_u16(),
             body: response.body_text(),
         })
@@ -97,7 +94,10 @@ impl TryFrom<HttpResponse> for TokenGrant {
 }
 
 impl ClientCredentials {
-    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+    ) -> Result<Self, reqwest::Error> {
         Ok(Self {
             http: http::client()?,
             oauth_url: OAUTH_URL.to_owned(),
@@ -123,7 +123,7 @@ impl ClientCredentials {
         self
     }
 
-    pub async fn access_token(&self) -> Result<AccessToken> {
+    pub async fn access_token(&self) -> Result<AccessToken, TokenError> {
         let mut issued = self.issued.lock().await;
 
         if let Some(current) = issued
@@ -153,7 +153,7 @@ impl ClientCredentials {
         *self.issued.lock().await = None;
     }
 
-    async fn request_token(&self) -> Result<TokenGrant> {
+    async fn request_token(&self) -> Result<TokenGrant, TokenError> {
         let request = self.http.post(format!("{}/token", self.oauth_url)).form(&[
             ("client_id", self.client_id.as_str()),
             ("client_secret", self.client_secret.as_str()),
@@ -268,7 +268,7 @@ mod tests {
 
         assert!(matches!(
             source(&server).access_token().await,
-            Err(Error::Auth { status: 400, .. })
+            Err(TokenError::Rejected { status: 400, .. })
         ));
     }
 }

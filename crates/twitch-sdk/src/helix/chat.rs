@@ -2,8 +2,31 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::client::{DataResponse, HelixClient, Json};
-use crate::{Error, Result};
+use super::{
+    ApiError,
+    client::{DataResponse, HelixClient, Json},
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum SendMessageError {
+    #[error(transparent)]
+    Api(#[from] ApiError),
+
+    #[error("twitch dropped the chat message: {}", .0.as_ref().map_or_else(|| "no reason given".to_owned(), ToString::to_string))]
+    Dropped(Option<DropReason>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DropReason {
+    pub code: String,
+    pub message: String,
+}
+
+impl fmt::Display for DropReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
 
 #[derive(Serialize)]
 struct SendChatMessage<'a> {
@@ -18,15 +41,9 @@ struct SentMessage {
     drop_reason: Option<DropReason>,
 }
 
-#[derive(Deserialize)]
-struct DropReason {
-    code: String,
-    message: String,
-}
-
-impl fmt::Display for DropReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
+impl SentMessage {
+    fn is_dropped(&self) -> bool {
+        !self.is_sent
     }
 }
 
@@ -36,24 +53,17 @@ impl HelixClient {
         broadcaster_id: &str,
         sender_id: &str,
         message: &str,
-    ) -> Result<()> {
-        let Json(DataResponse { data }) = self
-            .post(
-                "/chat/messages",
-                &SendChatMessage {
-                    broadcaster_id,
-                    sender_id,
-                    message,
-                },
-            )
-            .await?;
+    ) -> Result<(), SendMessageError> {
+        let request = SendChatMessage {
+            broadcaster_id,
+            sender_id,
+            message,
+        };
+        let Json(DataResponse { data }) =
+            self.post("/chat/messages", &request).await?.try_into()?;
 
-        match data.into_iter().find(|sent: &SentMessage| !sent.is_sent) {
-            Some(SentMessage {
-                drop_reason: Some(reason),
-                ..
-            }) => Err(Error::MessageDropped(reason.to_string())),
-            Some(_) => Err(Error::MessageDropped("unknown reason".to_owned())),
+        match data.into_iter().find(SentMessage::is_dropped) {
+            Some(dropped) => Err(SendMessageError::Dropped(dropped.drop_reason)),
             None => Ok(()),
         }
     }
@@ -115,9 +125,10 @@ mod tests {
 
         let error = helix(&server).send_chat_message("1", "2", "hi").await;
 
-        assert!(
-            matches!(error, Err(Error::MessageDropped(reason)) if reason.contains("msg_duplicate"))
-        );
+        assert!(matches!(
+            error,
+            Err(SendMessageError::Dropped(Some(DropReason { code, .. }))) if code == "msg_duplicate"
+        ));
     }
 
     #[tokio::test]
@@ -132,7 +143,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(Error::RateLimited { reset_at: Some(_) })
+            Err(SendMessageError::Api(ApiError::RateLimited {
+                reset_at: Some(_)
+            }))
         ));
     }
 
@@ -147,6 +160,9 @@ mod tests {
 
         let error = helix(&server).send_chat_message("1", "2", "hi").await;
 
-        assert!(matches!(error, Err(Error::Http { status: 401, .. })));
+        assert!(matches!(
+            error,
+            Err(SendMessageError::Api(ApiError::Status { status: 401, .. }))
+        ));
     }
 }

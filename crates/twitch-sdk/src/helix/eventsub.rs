@@ -1,17 +1,26 @@
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use super::client::{DataResponse, HelixClient, Json};
-use crate::{Error, Result, eventsub::Subscription, http::HttpResponse};
+use super::{
+    ApiError,
+    client::{DataResponse, HelixClient, Json},
+};
+use crate::{eventsub::Subscription, http::HttpResponse};
 
 const CONDUITS_PATH: &str = "/eventsub/conduits";
 const CONDUIT_SHARDS_PATH: &str = "/eventsub/conduits/shards";
 const SUBSCRIPTIONS_PATH: &str = "/eventsub/subscriptions";
+const SINGLE_SHARD: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct Conduit {
     pub id: String,
     pub shard_count: u32,
+}
+
+impl Conduit {
+    pub fn has_single_shard(&self) -> bool {
+        self.shard_count == SINGLE_SHARD
+    }
 }
 
 #[derive(Serialize)]
@@ -55,16 +64,29 @@ struct ShardError {
     code: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConduitError {
+    #[error(transparent)]
+    Api(#[from] ApiError),
+
+    #[error("conduit shard {shard} rejected: {code} - {message}")]
+    ShardRejected {
+        shard: String,
+        code: String,
+        message: String,
+    },
+}
+
 pub(crate) struct ShardAssigned;
 
 impl TryFrom<HttpResponse> for ShardAssigned {
-    type Error = Error;
+    type Error = ConduitError;
 
-    fn try_from(response: HttpResponse) -> Result<Self> {
+    fn try_from(response: HttpResponse) -> Result<Self, ConduitError> {
         let Json(UpdateShardsResponse { errors }) = response.try_into()?;
 
         match errors.into_iter().next() {
-            Some(error) => Err(Error::ShardAssignment {
+            Some(error) => Err(ConduitError::ShardRejected {
                 shard: error.id,
                 code: error.code,
                 message: error.message,
@@ -96,27 +118,31 @@ pub(crate) enum Subscribed {
 }
 
 impl TryFrom<HttpResponse> for Subscribed {
-    type Error = Error;
+    type Error = ApiError;
 
-    fn try_from(response: HttpResponse) -> Result<Self> {
-        match response.status {
-            status if status.is_success() => Ok(Self::Created),
-            StatusCode::CONFLICT => Ok(Self::AlreadyExists),
-            _ => Err(response.into()),
+    fn try_from(response: HttpResponse) -> Result<Self, ApiError> {
+        if response.is_success() {
+            Ok(Self::Created)
+        } else if response.is_conflict() {
+            Ok(Self::AlreadyExists)
+        } else {
+            Err(response.into())
         }
     }
 }
 
 impl HelixClient {
-    pub(crate) async fn conduits(&self) -> Result<Vec<Conduit>> {
-        let Json(DataResponse { data }) = self.get(CONDUITS_PATH).await?;
+    pub(crate) async fn conduits(&self) -> Result<Vec<Conduit>, ApiError> {
+        let Json(DataResponse { data }) = self.get(CONDUITS_PATH).await?.try_into()?;
         Ok(data)
     }
 
-    pub(crate) async fn create_conduit(&self, shard_count: u32) -> Result<Conduit> {
-        let Json(CreatedConduit { data: [conduit] }) = self
-            .post(CONDUITS_PATH, &CreateConduit { shard_count })
-            .await?;
+    pub(crate) async fn create_single_shard_conduit(&self) -> Result<Conduit, ApiError> {
+        let request = CreateConduit {
+            shard_count: SINGLE_SHARD,
+        };
+        let Json(CreatedConduit { data: [conduit] }) =
+            self.post(CONDUITS_PATH, &request).await?.try_into()?;
         Ok(conduit)
     }
 
@@ -125,7 +151,7 @@ impl HelixClient {
         conduit_id: &str,
         shard_id: &str,
         session_id: &str,
-    ) -> Result<ShardAssigned> {
+    ) -> Result<ShardAssigned, ConduitError> {
         let request = UpdateShards {
             conduit_id,
             shards: [ShardTransport {
@@ -137,14 +163,14 @@ impl HelixClient {
             }],
         };
 
-        self.patch(CONDUIT_SHARDS_PATH, &request).await
+        self.patch(CONDUIT_SHARDS_PATH, &request).await?.try_into()
     }
 
     pub(crate) async fn subscribe(
         &self,
         subscription: &Subscription,
         conduit_id: &str,
-    ) -> Result<Subscribed> {
+    ) -> Result<Subscribed, ApiError> {
         let request = CreateSubscription {
             kind: subscription.kind(),
             version: subscription.version(),
@@ -155,14 +181,14 @@ impl HelixClient {
             },
         };
 
-        self.post(SUBSCRIPTIONS_PATH, &request).await
+        self.post(SUBSCRIPTIONS_PATH, &request).await?.try_into()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use reqwest::header::HeaderMap;
+    use reqwest::{StatusCode, header::HeaderMap};
 
     use super::*;
 
@@ -186,7 +212,7 @@ mod tests {
         );
         assert!(matches!(
             Subscribed::try_from(response(403, "missing scope")),
-            Err(Error::Http { status: 403, .. })
+            Err(ApiError::Status { status: 403, .. })
         ));
     }
 
@@ -199,7 +225,7 @@ mod tests {
 
         assert!(matches!(
             ShardAssigned::try_from(rejected),
-            Err(Error::ShardAssignment { shard, .. }) if shard == "0"
+            Err(ConduitError::ShardRejected { shard, .. }) if shard == "0"
         ));
         assert!(
             ShardAssigned::try_from(response(202, r#"{"data":[{"id":"0"}],"errors":[]}"#)).is_ok()

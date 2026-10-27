@@ -1,5 +1,11 @@
 use std::collections::{HashSet, VecDeque};
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Occurrence {
+    First,
+    Repeated,
+}
+
 pub(crate) struct RecentIds {
     capacity: usize,
     order: VecDeque<String>,
@@ -15,21 +21,28 @@ impl RecentIds {
         }
     }
 
-    /// Returns `false` if the id was already seen recently.
-    pub fn insert(&mut self, id: &str) -> bool {
+    pub fn record(&mut self, id: &str) -> Occurrence {
         if self.seen.contains(id) {
-            return false;
+            return Occurrence::Repeated;
         }
 
-        if self.order.len() == self.capacity
-            && let Some(oldest) = self.order.pop_front()
-        {
-            self.seen.remove(&oldest);
+        if self.is_full() {
+            self.forget_oldest();
         }
 
         self.order.push_back(id.to_owned());
         self.seen.insert(id.to_owned());
-        true
+        Occurrence::First
+    }
+
+    fn is_full(&self) -> bool {
+        self.order.len() == self.capacity
+    }
+
+    fn forget_oldest(&mut self) {
+        if let Some(oldest) = self.order.pop_front() {
+            self.seen.remove(&oldest);
+        }
     }
 }
 
@@ -38,13 +51,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_repeated_ids_and_forgets_the_oldest() {
+    fn reports_repeated_ids_and_forgets_the_oldest() {
         let mut ids = RecentIds::new(2);
 
-        assert!(ids.insert("a"));
-        assert!(!ids.insert("a"));
-        assert!(ids.insert("b"));
-        assert!(ids.insert("c"));
-        assert!(ids.insert("a"));
+        assert_eq!(ids.record("a"), Occurrence::First);
+        assert_eq!(ids.record("a"), Occurrence::Repeated);
+        assert_eq!(ids.record("b"), Occurrence::First);
+        assert_eq!(ids.record("c"), Occurrence::First);
+        assert_eq!(ids.record("a"), Occurrence::First);
     }
 }

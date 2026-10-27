@@ -4,12 +4,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::subscription::{CHAT_MESSAGE, REWARD_REDEMPTION_ADD};
-use crate::{
-    Error, Result,
-    event::{
-        Badge, Broadcaster, ChatMessage, Event, Mention, ParentMessage, RedemptionStatus, Reward,
-        RewardRedemption, User,
-    },
+use crate::event::{
+    Badge, Broadcaster, ChatMessage, Event, Mention, ParentMessage, RedemptionStatus, Reward,
+    RewardRedemption, User,
 };
 
 pub(crate) enum Frame {
@@ -36,9 +33,9 @@ pub(crate) struct Welcome {
 }
 
 impl FromStr for Frame {
-    type Err = Error;
+    type Err = serde_json::Error;
 
-    fn from_str(text: &str) -> Result<Self> {
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
         let Envelope { metadata, payload } = serde_json::from_str(text)?;
 
         Ok(match metadata.message_type.as_str() {
@@ -66,7 +63,7 @@ impl FromStr for Frame {
     }
 }
 
-fn decode_notification(message_id: String, payload: Value) -> Result<Frame> {
+fn decode_notification(message_id: String, payload: Value) -> Result<Frame, serde_json::Error> {
     let NotificationPayload {
         subscription,
         event,
