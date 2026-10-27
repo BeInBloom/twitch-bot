@@ -29,7 +29,7 @@ pub struct TokenManager {
     client_secret: String,
     refresh_token: RwLock<String>,
     current_token: RwLock<Option<String>>,
-    init_lock: Mutex<()>,
+    refresh_lock: Mutex<()>,
     on_rotation: Option<OnTokenRotation>,
 }
 
@@ -42,7 +42,7 @@ impl TokenManager {
             client_secret,
             refresh_token: RwLock::new(refresh_token),
             current_token: RwLock::new(None),
-            init_lock: Mutex::new(()),
+            refresh_lock: Mutex::new(()),
             on_rotation: None,
         }
     }
@@ -54,18 +54,26 @@ impl TokenManager {
     }
 
     pub async fn get_token(&self) -> Result<String> {
-        if let Some(token) = self.current_token.read().await.as_ref() {
-            return Ok(token.clone());
+        if let Some(token) = self.cached_token().await {
+            return Ok(token);
         }
 
-        let _guard = self.init_lock.lock().await;
+        let _guard = self.refresh_lock.lock().await;
 
-        if let Some(token) = self.current_token.read().await.as_ref() {
-            return Ok(token.clone());
+        if let Some(token) = self.cached_token().await {
+            return Ok(token);
         }
 
-        let (token, _) = self.refresh_now().await?;
+        let (token, _) = self.refresh_locked().await?;
         Ok(token)
+    }
+
+    pub async fn invalidate(&self) {
+        *self.current_token.write().await = None;
+    }
+
+    async fn cached_token(&self) -> Option<String> {
+        self.current_token.read().await.clone()
     }
 
     pub fn start_background_loop(self: Arc<Self>) -> JoinHandle<()> {
@@ -95,6 +103,11 @@ impl TokenManager {
     }
 
     async fn refresh_now(&self) -> Result<(String, u64)> {
+        let _guard = self.refresh_lock.lock().await;
+        self.refresh_locked().await
+    }
+
+    async fn refresh_locked(&self) -> Result<(String, u64)> {
         let current_refresh = self.refresh_token.read().await.clone();
 
         let params = [

@@ -1,9 +1,14 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::process::Command;
 
 use crate::{app::ports::NowPlayingProvider, model::TrackInfo};
+
+use super::playerctl;
+
+// ASCII Unit Separator: в отличие от ';', не встречается в названиях треков.
+const FIELD_SEPARATOR: char = '\u{1f}';
+const METADATA_FORMAT: &str = "{{ artist }}\u{1f}{{ title }}\u{1f}{{ album }}\u{1f}{{ url }}";
 
 #[derive(Debug, Error)]
 enum ParseTrackInfoError {
@@ -11,6 +16,7 @@ enum ParseTrackInfoError {
     IncompleteMetadata,
 }
 
+#[derive(Default)]
 pub struct PlayerctlNowPlayingProvider;
 
 impl PlayerctlNowPlayingProvider {
@@ -19,27 +25,14 @@ impl PlayerctlNowPlayingProvider {
     }
 }
 
-impl Default for PlayerctlNowPlayingProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+fn parse_track_info(value: &str) -> Result<TrackInfo, ParseTrackInfoError> {
+    let mut fields = value.trim_end_matches('\n').split(FIELD_SEPARATOR);
+    let mut next_field = || fields.next().ok_or(ParseTrackInfoError::IncompleteMetadata);
 
-fn parse_track_info(value: String) -> Result<TrackInfo, ParseTrackInfoError> {
-    let mut parts = value.splitn(5, ';');
-
-    let artist = parts
-        .next()
-        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let title = parts
-        .next()
-        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let album = parts
-        .next()
-        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
-    let url = parts
-        .next()
-        .ok_or(ParseTrackInfoError::IncompleteMetadata)?;
+    let artist = next_field()?;
+    let title = next_field()?;
+    let album = next_field()?;
+    let url = next_field()?;
 
     Ok(TrackInfo {
         artist: artist.to_owned(),
@@ -51,23 +44,43 @@ fn parse_track_info(value: String) -> Result<TrackInfo, ParseTrackInfoError> {
 
 #[async_trait]
 impl NowPlayingProvider for PlayerctlNowPlayingProvider {
-    async fn current_track(&self) -> anyhow::Result<TrackInfo> {
-        let output = Command::new("playerctl")
-            .args([
-                "metadata",
-                "--format",
-                "{{ artist }};{{ title }};{{ album }};{{ url }};",
-            ])
-            .output()
-            .await
-            .context("failed to execute playerctl")?;
+    async fn current_track(&self) -> anyhow::Result<Option<TrackInfo>> {
+        let Some(metadata) = playerctl::run(&["metadata", "--format", METADATA_FORMAT]).await?
+        else {
+            return Ok(None);
+        };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("playerctl failed: {}", stderr));
-        }
+        parse_track_info(&metadata)
+            .map(Some)
+            .context("failed to parse playerctl track metadata")
+    }
+}
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        parse_track_info(stdout).context("failed to parse playerctl track metadata")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_all_fields() {
+        let track =
+            parse_track_info("Artist\u{1f}Title; Part 2\u{1f}Album\u{1f}https://x\n").unwrap();
+
+        assert_eq!(track.artist, "Artist");
+        assert_eq!(track.title, "Title; Part 2");
+        assert_eq!(track.album.as_deref(), Some("Album"));
+        assert_eq!(track.url.as_deref(), Some("https://x"));
+    }
+
+    #[test]
+    fn empty_optional_fields_become_none() {
+        let track = parse_track_info("Artist\u{1f}Title\u{1f}\u{1f}\n").unwrap();
+
+        assert!(track.album.is_none());
+        assert!(track.url.is_none());
+    }
+
+    #[test]
+    fn rejects_incomplete_metadata() {
+        assert!(parse_track_info("Artist\u{1f}Title").is_err());
     }
 }

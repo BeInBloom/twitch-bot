@@ -10,8 +10,8 @@ use tracing::error;
 
 use crate::{app::dispatch::Handler, model::Event};
 
-const BUFFER_SIZE: usize = 30;
-const HANDLER_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_CONCURRENT_HANDLERS: usize = 30;
+const HANDLER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[async_trait]
 pub trait EventConsumer: Send + Sync + 'static {
@@ -34,7 +34,7 @@ impl<H: Handler<Event>> Consumer<H> {
 #[async_trait]
 impl<H: Handler<Event>> EventConsumer for Consumer<H> {
     async fn consume(&self, mut ch: mpsc::Receiver<Event>) {
-        let sem = Arc::new(Semaphore::new(BUFFER_SIZE));
+        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS));
 
         while let Some(event) = ch.recv().await {
             let permit = match sem.clone().acquire_owned().await {
@@ -58,7 +58,7 @@ impl<H: Handler<Event>> EventConsumer for Consumer<H> {
             });
         }
 
-        let _ = sem.acquire_many(BUFFER_SIZE as u32).await;
+        let _ = sem.acquire_many(MAX_CONCURRENT_HANDLERS as u32).await;
     }
 }
 

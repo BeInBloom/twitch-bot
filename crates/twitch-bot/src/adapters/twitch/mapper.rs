@@ -71,3 +71,32 @@ fn map_role(role: TwitchRole) -> Role {
         _ => Role::PLEB,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_highest_twitch_role() {
+        let mut moderator_and_subscriber = TwitchRole::empty();
+        moderator_and_subscriber.add(TwitchRole::SUBSCRIBER);
+        moderator_and_subscriber.add(TwitchRole::MODERATOR);
+
+        assert_eq!(map_role(moderator_and_subscriber), Role::MODERATOR);
+        assert_eq!(map_role(TwitchRole::BROADCASTER), Role::BROADCASTER);
+        assert_eq!(map_role(TwitchRole::empty()), Role::PLEB);
+    }
+
+    #[test]
+    fn chat_target_requires_broadcaster_id_and_login() {
+        let mut target = TwitchChatTarget::default();
+        target.channel_login = Some("channel".into());
+        assert!(map_chat_target(target.clone()).is_none());
+
+        target.broadcaster_id = Some("1".into());
+        assert_eq!(
+            map_chat_target(target),
+            Some(ChatTarget::new("1", "channel"))
+        );
+    }
+}

@@ -1,10 +1,8 @@
 mod chat_router;
 mod command_router;
 mod event_router;
-mod projector;
-mod reward_router;
-mod route;
 pub(crate) mod request;
+mod reward_router;
 pub(crate) mod traits;
 
 pub(crate) use chat_router::ChatRouter;

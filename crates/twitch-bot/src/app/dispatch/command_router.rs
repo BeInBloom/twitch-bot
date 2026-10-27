@@ -3,11 +3,11 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use crate::app::command::CommandName;
 use crate::app::dispatch::{
     request::CommandRequest,
     traits::{Handler, Interceptor, apply_interceptors},
 };
-use crate::app::command::CommandName;
 
 pub(crate) struct CommandRouter {
     routes: HashMap<CommandName, Arc<dyn Handler<CommandRequest>>>,
@@ -75,5 +75,75 @@ impl Handler<CommandRequest> for CommandRouter {
         } else {
             self.fallback_handler.handle(request).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Mutex, time::SystemTime};
+
+    use super::*;
+    use crate::{
+        app::dispatch::request::ChatRequest,
+        model::{ChatMessage, ChatTarget, Platform, Role, User},
+    };
+
+    struct RecordingHandler {
+        label: &'static str,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl Handler<CommandRequest> for RecordingHandler {
+        async fn handle(&self, _request: CommandRequest) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(self.label);
+            Ok(())
+        }
+    }
+
+    fn command(text: &str) -> CommandRequest {
+        let message = ChatMessage {
+            author: User {
+                id: "1".into(),
+                display_name: "user".into(),
+                platform: Platform::Twitch,
+                role: Role::PLEB,
+            },
+            target: ChatTarget::new("1", "channel"),
+            text: text.into(),
+            received_at: SystemTime::now(),
+        };
+
+        match ChatRequest::from(message) {
+            ChatRequest::Command(request) => request,
+            ChatRequest::Plain(_) => panic!("{text} is not a command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn routes_known_commands_and_falls_back_for_unknown() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let handler = |label| {
+            Arc::new(RecordingHandler {
+                label,
+                calls: calls.clone(),
+            })
+        };
+
+        let router = CommandRouter::builder()
+            .route("music", handler("music"))
+            .fallback(handler("fallback"))
+            .build()
+            .unwrap();
+
+        router.handle(command("!music")).await.unwrap();
+        router.handle(command("!unknown")).await.unwrap();
+
+        assert_eq!(*calls.lock().unwrap(), ["music", "fallback"]);
+    }
+
+    #[test]
+    fn build_requires_fallback() {
+        assert!(CommandRouter::builder().build().is_err());
     }
 }

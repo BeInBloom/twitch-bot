@@ -1,27 +1,45 @@
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, parse_macro_input, parse_quote};
 
 #[proc_macro_derive(WrapperType)]
 pub fn wrapper_type_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    expand_wrapper_type(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro_derive(SecretDebug)]
+pub fn secret_debug_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
     let type_name = &input.ident;
+    let masked = format!("{type_name}(***)");
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    match input.data {
-        syn::Data::Struct(ref data) => match data.fields {
-            syn::Fields::Unnamed(ref fields) if fields.unnamed.len() == 1 => {}
-            _ => panic!("wrappertype supports only tuple structs with one field"),
-        },
-        _ => panic!("wrappertype supports only structs"),
+    quote! {
+        impl #impl_generics ::std::fmt::Debug for #type_name #ty_generics #where_clause {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(#masked)
+            }
+        }
     }
+    .into()
+}
 
+fn expand_wrapper_type(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    ensure_single_field_tuple_struct(input)?;
+
+    let type_name = &input.ident;
     let field_name = type_name.to_string().to_snake_case();
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let generics = &input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let mut deserialize_generics = input.generics.clone();
+    deserialize_generics.params.insert(0, parse_quote!('de));
+    let (deserialize_impl_generics, _, _) = deserialize_generics.split_for_impl();
 
-    let expanded = quote! {
+    Ok(quote! {
         impl #impl_generics TryFrom<String>
             for #type_name #ty_generics
             #where_clause
@@ -41,7 +59,7 @@ pub fn wrapper_type_derive(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl<'de> #impl_generics serde::Deserialize<'de>
+        impl #deserialize_impl_generics serde::Deserialize<'de>
             for #type_name #ty_generics
             #where_clause
         {
@@ -59,7 +77,17 @@ pub fn wrapper_type_derive(input: TokenStream) -> TokenStream {
                 &self.0
             }
         }
-    };
+    })
+}
 
-    TokenStream::from(expanded)
+fn ensure_single_field_tuple_struct(input: &DeriveInput) -> syn::Result<()> {
+    match &input.data {
+        Data::Struct(data) if matches!(&data.fields, Fields::Unnamed(fields) if fields.unnamed.len() == 1) => {
+            Ok(())
+        }
+        _ => Err(syn::Error::new_spanned(
+            &input.ident,
+            "WrapperType supports only tuple structs with one field",
+        )),
+    }
 }

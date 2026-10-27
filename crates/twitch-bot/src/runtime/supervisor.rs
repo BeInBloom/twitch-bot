@@ -5,13 +5,12 @@ use tracing::{error, info};
 
 use crate::app::ports::EventSource;
 
-use super::{EventConsumer, LogGuard, Shutdowner, SignalHandler};
+use super::{EventConsumer, Shutdowner, SignalHandler};
 
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[non_exhaustive]
 pub struct Supervisor<S, F, C> {
-    _log_guard: LogGuard,
     signal_handler: S,
     fetcher: F,
     consumer: C,
@@ -23,15 +22,12 @@ where
     F: EventSource + Shutdowner,
     C: EventConsumer,
 {
-    pub fn new(signal_handler: S, fetcher: F, consumer: C) -> anyhow::Result<Self> {
-        let log_guard = LogGuard::init();
-
-        Ok(Self {
-            _log_guard: log_guard,
+    pub fn new(signal_handler: S, fetcher: F, consumer: C) -> Self {
+        Self {
             signal_handler,
             fetcher,
             consumer,
-        })
+        }
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
@@ -41,10 +37,9 @@ where
             signal_handler,
             fetcher,
             consumer,
-            ..
         } = self;
 
-        let event_ch = fetcher.fetch().await;
+        let event_ch = fetcher.fetch().await?;
         let handle = tokio::spawn(async move {
             consumer.consume(event_ch).await;
         });

@@ -1,3 +1,4 @@
+mod playerctl;
 mod playerctl_now_playing;
 mod playerctl_skip;
 

@@ -70,7 +70,7 @@ impl RewardRouter {
 #[async_trait]
 impl Handler<RewardRequest> for RewardRouter {
     async fn handle(&self, request: RewardRequest) -> anyhow::Result<()> {
-        if let Some(handler) = self.routes.get(request.reward_id()) {
+        if let Some(handler) = self.routes.get(&request.reward_id) {
             handler.handle(request).await
         } else {
             self.fallback_handler.handle(request).await

@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
-use reqwest::{Client, redirect};
+use reqwest::{Client, Response, StatusCode, redirect};
 use serde_json::json;
 
 use crate::auth::TokenManager;
 
 use super::{
     errors::SenderError,
-    helix_types::{CLIENT_TIMEOUT, CONNECTION_TIMEOUT, REDIRECT_LIMIT, TWITCH_HELIX_URL},
+    helix_types::{
+        CLIENT_TIMEOUT, CONNECTION_TIMEOUT, REDIRECT_LIMIT, SendMessageResponse, TWITCH_HELIX_URL,
+    },
 };
 
 #[non_exhaustive]
@@ -35,23 +37,46 @@ impl HelixSender {
         })
     }
 
-    pub async fn send(&self, channel: &str, message: &str) -> Result<(), SenderError> {
+    pub async fn send(&self, broadcaster_id: &str, message: &str) -> Result<(), SenderError> {
+        let mut response = self.post_message(broadcaster_id, message).await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            self.token_manager.invalidate().await;
+            response = self.post_message(broadcaster_id, message).await?;
+        }
+
+        let body: SendMessageResponse = response.error_for_status()?.json().await?;
+
+        match body.data.into_iter().find(|sent| !sent.is_sent) {
+            Some(dropped) => Err(SenderError::MessageDropped(
+                dropped
+                    .drop_reason
+                    .map_or_else(|| "unknown reason".to_string(), |reason| reason.to_string()),
+            )),
+            None => Ok(()),
+        }
+    }
+
+    async fn post_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<Response, SenderError> {
         let token = self.token_manager.get_token().await?;
         let access_token = token.strip_prefix("oauth:").unwrap_or(&token);
 
-        self.client
+        Ok(self
+            .client
             .post(TWITCH_HELIX_URL)
             .bearer_auth(access_token)
             .header("Client-Id", &self.client_id)
             .json(&json!({
-                "broadcaster_id": channel,
+                "broadcaster_id": broadcaster_id,
                 "sender_id": self.writer_id,
                 "message": message
             }))
             .send()
-            .await?;
-
-        Ok(())
+            .await?)
     }
 }
 

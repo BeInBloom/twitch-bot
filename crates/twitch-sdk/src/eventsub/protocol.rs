@@ -21,7 +21,8 @@ pub struct SessionPayload {
 #[derive(Debug, Deserialize)]
 pub struct Session {
     pub id: String,
-    pub keepalive_timeout_seconds: u64,
+    pub keepalive_timeout_seconds: Option<u64>,
+    pub reconnect_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +47,6 @@ pub struct RewardInfo {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatMessageEvent {
-    #[allow(dead_code)]
     pub broadcaster_user_id: String,
     pub broadcaster_user_login: String,
     pub chatter_user_id: String,

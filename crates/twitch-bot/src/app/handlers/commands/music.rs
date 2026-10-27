@@ -11,14 +11,12 @@ use crate::{
     model::TrackInfo,
 };
 
-struct TrackResponse(String);
+const NOTHING_PLAYING_RESPONSE: &str = "сейчас ничего не играет";
 
-impl From<TrackInfo> for TrackResponse {
-    fn from(value: TrackInfo) -> Self {
-        Self(format!(
-            "сейчас играет трек {} - {}",
-            value.artist, value.title
-        ))
+fn describe_track(track: Option<TrackInfo>) -> String {
+    match track {
+        Some(track) => format!("сейчас играет трек {} - {}", track.artist, track.title),
+        None => NOTHING_PLAYING_RESPONSE.to_string(),
     }
 }
 
@@ -43,11 +41,10 @@ where
     P: NowPlayingProvider,
 {
     async fn handle(&self, request: CommandRequest) -> anyhow::Result<()> {
-        let result = self.now_playing.current_track().await?;
-        let result: TrackResponse = result.into();
+        let response = describe_track(self.now_playing.current_track().await?);
 
         self.sender
-            .send(&request.message.target, &result.0)
+            .send(&request.message.target, &response)
             .await
             .context("failed to send music response")
     }

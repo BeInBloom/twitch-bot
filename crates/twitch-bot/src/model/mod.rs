@@ -2,7 +2,6 @@
 
 pub mod chat_target;
 pub mod event;
-pub mod ids;
 pub mod role;
 pub mod track;
 pub mod user;

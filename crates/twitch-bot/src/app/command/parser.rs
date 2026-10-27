@@ -15,3 +15,22 @@ impl CommandParser {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_command_with_args() {
+        let invocation = CommandParser::parse_chat_text("!music  next   song").unwrap();
+
+        assert_eq!(invocation.name, CommandName::from("music"));
+        assert_eq!(invocation.args, ["next", "song"]);
+    }
+
+    #[test]
+    fn ignores_plain_text_and_bare_prefix() {
+        assert!(CommandParser::parse_chat_text("hello !music").is_none());
+        assert!(CommandParser::parse_chat_text("!").is_none());
+    }
+}

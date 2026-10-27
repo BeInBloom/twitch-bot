@@ -4,7 +4,7 @@ use crate::model::TrackInfo;
 
 #[async_trait]
 pub trait NowPlayingProvider: Send + Sync + 'static {
-    async fn current_track(&self) -> anyhow::Result<TrackInfo>;
+    async fn current_track(&self) -> anyhow::Result<Option<TrackInfo>>;
 }
 
 #[async_trait]

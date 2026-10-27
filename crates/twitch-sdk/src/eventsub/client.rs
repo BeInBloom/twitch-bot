@@ -1,17 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
-use url::Url;
+use tracing::{debug, info, warn};
 
 use super::protocol::{
     ChatBadge, ChatMessageEvent, EventSubMessage, NotificationPayload, RewardRedemptionEvent,
@@ -19,48 +20,43 @@ use super::protocol::{
 };
 use crate::auth::TokenManager;
 use crate::model::{TwitchChatTarget, TwitchEvent, TwitchRole, TwitchUser};
+use crate::reconnect::spawn_reconnecting;
+
 const EVENTSUB_WS_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const EVENTSUB_API_URL: &str = "https://api.twitch.tv/helix/eventsub/subscriptions";
+const REWARD_REDEMPTION_SUBSCRIPTION: &str = "channel.channel_points_custom_reward_redemption.add";
+const CHAT_MESSAGE_SUBSCRIPTION: &str = "channel.chat.message";
 const CHANNEL_BUFFER_SIZE: usize = 100;
-const RECONNECT_DELAY_SECS: u64 = 5;
+const DEFAULT_KEEPALIVE_SECS: u64 = 10;
 const KEEPALIVE_TIMEOUT_BUFFER_SECS: u64 = 5;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 #[derive(Debug, Serialize)]
-struct SubscriptionRequest {
+struct SubscriptionRequest<'a> {
     #[serde(rename = "type")]
-    sub_type: String,
-    version: String,
+    sub_type: &'a str,
+    version: &'a str,
     condition: serde_json::Value,
-    transport: Transport,
+    transport: Transport<'a>,
 }
 
 #[derive(Debug, Serialize)]
-struct Transport {
-    method: String,
-    session_id: String,
+struct Transport<'a> {
+    method: &'a str,
+    session_id: &'a str,
+}
+
+enum Control {
+    Continue,
+    Reconnect(String),
 }
 
 #[non_exhaustive]
 pub struct EventSubClient {
-    token_manager: Arc<TokenManager>,
-    client: Client,
-    broadcaster_id: String,
-    bot_user_id: String,
-    client_id: String,
+    subscriber: Arc<Subscriber>,
     cancel_token: CancellationToken,
     handle: Option<JoinHandle<()>>,
-}
-
-struct EventSubLifecycleParams {
-    event_tx: mpsc::Sender<TwitchEvent>,
-    token_manager: Arc<TokenManager>,
-    client: Client,
-    broadcaster_id: String,
-    bot_user_id: String,
-    client_id: String,
-    cancel_token: CancellationToken,
 }
 
 impl Drop for EventSubClient {
@@ -78,11 +74,13 @@ impl EventSubClient {
         bot_user_id: String,
     ) -> Self {
         Self {
-            token_manager,
-            client: Client::new(),
-            broadcaster_id,
-            bot_user_id,
-            client_id,
+            subscriber: Arc::new(Subscriber {
+                token_manager,
+                client: Client::new(),
+                client_id,
+                broadcaster_id,
+                bot_user_id,
+            }),
             cancel_token: CancellationToken::new(),
             handle: None,
         }
@@ -100,50 +98,25 @@ impl EventSubClient {
     }
 
     pub async fn connect(&mut self) -> Result<mpsc::Receiver<TwitchEvent>> {
-        let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        anyhow::ensure!(
+            self.handle.is_none(),
+            "EventSub client is already connected"
+        );
 
-        let tm = self.token_manager.clone();
-        let client = self.client.clone();
-        let broadcaster_id = self.broadcaster_id.clone();
-        let bot_user_id = self.bot_user_id.clone();
-        let client_id = self.client_id.clone();
-        let cancel = self.cancel_token.clone();
+        let (event_tx, event_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let subscriber = self.subscriber.clone();
 
-        self.handle = Some(tokio::spawn(async move {
-            info!("starting EventSub client lifecycle...");
+        self.handle = Some(spawn_reconnecting(
+            "EventSub",
+            self.cancel_token.clone(),
+            move || {
+                let subscriber = subscriber.clone();
+                let event_tx = event_tx.clone();
+                async move { run_lifecycle(&subscriber, &event_tx).await }
+            },
+        ));
 
-            loop {
-                tokio::select! {
-                    biased;
-
-                    _ = cancel.cancelled() => {
-                        info!("EventSub client cancelled");
-                        break;
-                    }
-
-                    result = run_lifecycle(EventSubLifecycleParams {
-                        event_tx: tx.clone(),
-                        token_manager: tm.clone(),
-                        client: client.clone(),
-                        broadcaster_id: broadcaster_id.clone(),
-                        bot_user_id: bot_user_id.clone(),
-                        client_id: client_id.clone(),
-                        cancel_token: cancel.clone(),
-                    }) => {
-                        if let Err(e) = result {
-                            if cancel.is_cancelled() {
-                                info!("EventSub shutdown complete");
-                                break;
-                            }
-                            error!("EventSub connection lost: {:?}. reconnecting in {}s...", e, RECONNECT_DELAY_SECS);
-                            tokio::time::sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
-                        }
-                    }
-                }
-            }
-        }));
-
-        Ok(rx)
+        Ok(event_rx)
     }
 
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
@@ -156,44 +129,115 @@ impl EventSubClient {
     }
 }
 
-async fn run_lifecycle(params: EventSubLifecycleParams) -> Result<()> {
-    let EventSubLifecycleParams {
-        event_tx,
-        token_manager,
-        client,
-        broadcaster_id,
-        bot_user_id,
-        client_id,
-        cancel_token,
-    } = params;
+struct Subscriber {
+    token_manager: Arc<TokenManager>,
+    client: Client,
+    client_id: String,
+    broadcaster_id: String,
+    bot_user_id: String,
+}
 
-    let url = Url::parse(EVENTSUB_WS_URL)?;
-    info!("connecting to EventSub: {}", url);
-    let (mut ws_stream, _) = connect_async(url.to_string())
+impl Subscriber {
+    async fn subscribe_all(&self, session_id: &str) -> Result<()> {
+        self.subscribe(
+            session_id,
+            REWARD_REDEMPTION_SUBSCRIPTION,
+            serde_json::json!({ "broadcaster_user_id": self.broadcaster_id }),
+        )
+        .await?;
+
+        self.subscribe(
+            session_id,
+            CHAT_MESSAGE_SUBSCRIPTION,
+            serde_json::json!({
+                "broadcaster_user_id": self.broadcaster_id,
+                "user_id": self.bot_user_id
+            }),
+        )
+        .await
+    }
+
+    async fn subscribe(
+        &self,
+        session_id: &str,
+        sub_type: &str,
+        condition: serde_json::Value,
+    ) -> Result<()> {
+        let token = self.token_manager.get_token().await?;
+        let access_token = token.strip_prefix("oauth:").unwrap_or(&token);
+
+        let request = SubscriptionRequest {
+            sub_type,
+            version: "1",
+            condition,
+            transport: Transport {
+                method: "websocket",
+                session_id,
+            },
+        };
+
+        let response = self
+            .client
+            .post(EVENTSUB_API_URL)
+            .bearer_auth(access_token)
+            .header("Client-Id", &self.client_id)
+            .json(&request)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("subscribed to {sub_type}");
+            return Ok(());
+        }
+
+        if status == StatusCode::UNAUTHORIZED {
+            self.token_manager.invalidate().await;
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        bail!("failed to subscribe to {sub_type}: {status} - {body}")
+    }
+}
+
+async fn run_lifecycle(
+    subscriber: &Subscriber,
+    event_tx: &mpsc::Sender<TwitchEvent>,
+) -> Result<()> {
+    let (mut ws, session) = connect(EVENTSUB_WS_URL).await?;
+    subscriber.subscribe_all(&session.id).await?;
+    let mut keepalive = keepalive_timeout(&session);
+
+    loop {
+        let reconnect_url = read_until_reconnect(&mut ws, event_tx, keepalive).await?;
+
+        // Twitch переносит подписки на новую сессию сам. Старое соединение должно
+        // жить, пока новое не получит welcome, поэтому ws заменяется только после connect.
+        let (new_ws, new_session) = connect(&reconnect_url).await?;
+        info!("EventSub session migrated: {}", new_session.id);
+        ws = new_ws;
+        keepalive = keepalive_timeout(&new_session);
+    }
+}
+
+async fn connect(url: &str) -> Result<(WsStream, Session)> {
+    info!("connecting to EventSub: {url}");
+    let (mut ws, _) = connect_async(url)
         .await
         .context("EventSub WebSocket connection failed")?;
 
-    let session = receive_welcome(&mut ws_stream).await?;
+    let session = receive_welcome(&mut ws).await?;
     info!("EventSub session established: {}", session.id);
 
-    let token = token_manager.get_token().await?;
-    let api_token = token.strip_prefix("oauth:").unwrap_or(&token);
+    Ok((ws, session))
+}
 
-    subscribe_to_rewards(&client, &client_id, api_token, &broadcaster_id, &session.id).await?;
-    subscribe_to_chat(
-        &client,
-        &client_id,
-        api_token,
-        &broadcaster_id,
-        &bot_user_id,
-        &session.id,
-    )
-    .await?;
+fn keepalive_timeout(session: &Session) -> Duration {
+    let keepalive_secs = session
+        .keepalive_timeout_seconds
+        .unwrap_or(DEFAULT_KEEPALIVE_SECS);
 
-    let keepalive_timeout =
-        Duration::from_secs(session.keepalive_timeout_seconds + KEEPALIVE_TIMEOUT_BUFFER_SECS);
-
-    run_eventsub_loop(ws_stream, event_tx, cancel_token, keepalive_timeout).await
+    Duration::from_secs(keepalive_secs + KEEPALIVE_TIMEOUT_BUFFER_SECS)
 }
 
 async fn receive_welcome(ws: &mut WsStream) -> Result<Session> {
@@ -201,30 +245,19 @@ async fn receive_welcome(ws: &mut WsStream) -> Result<Session> {
         let msg = ws
             .next()
             .await
-            .ok_or_else(|| anyhow::anyhow!("WebSocket closed before welcome"))?
+            .ok_or_else(|| anyhow!("WebSocket closed before welcome"))?
             .context("WebSocket error")?;
 
         let text = match msg {
             Message::Text(t) => t,
-            Message::Ping(_data) => {
-                debug!("received PING during welcome handshake");
-                continue;
-            }
-            Message::Pong(_) => continue,
-            Message::Binary(_) => {
-                debug!("received binary message during welcome handshake");
-                continue;
-            }
-            Message::Frame(_) => continue,
-            Message::Close(_) => {
-                return Err(anyhow::anyhow!("WebSocket closed during welcome"));
-            }
+            Message::Close(_) => bail!("WebSocket closed during welcome"),
+            _ => continue,
         };
 
         let parsed: EventSubMessage = match serde_json::from_str(&text) {
             Ok(p) => p,
             Err(e) => {
-                warn!("failed to parse message during welcome: {} - {}", e, text);
+                warn!("failed to parse message during welcome: {e} - {text}");
                 continue;
             }
         };
@@ -242,167 +275,127 @@ async fn receive_welcome(ws: &mut WsStream) -> Result<Session> {
     }
 }
 
-async fn subscribe_to_rewards(
-    client: &Client,
-    client_id: &str,
-    access_token: &str,
-    broadcaster_id: &str,
-    session_id: &str,
-) -> Result<()> {
-    let request = SubscriptionRequest {
-        sub_type: "channel.channel_points_custom_reward_redemption.add".to_string(),
-        version: "1".to_string(),
-        condition: serde_json::json!({
-            "broadcaster_user_id": broadcaster_id
-        }),
-        transport: Transport {
-            method: "websocket".to_string(),
-            session_id: session_id.to_string(),
-        },
-    };
-
-    let response = client
-        .post(EVENTSUB_API_URL)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Client-Id", client_id)
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        info!("subscribed to channel.channel_points_custom_reward_redemption.add");
-        Ok(())
-    } else {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(anyhow::anyhow!(
-            "Failed to subscribe: {} - {}",
-            status,
-            body
-        ))
-    }
-}
-
-async fn subscribe_to_chat(
-    client: &Client,
-    client_id: &str,
-    access_token: &str,
-    broadcaster_id: &str,
-    bot_user_id: &str,
-    session_id: &str,
-) -> Result<()> {
-    let request = SubscriptionRequest {
-        sub_type: "channel.chat.message".to_string(),
-        version: "1".to_string(),
-        condition: serde_json::json!({
-            "broadcaster_user_id": broadcaster_id,
-            "user_id": bot_user_id
-        }),
-        transport: Transport {
-            method: "websocket".to_string(),
-            session_id: session_id.to_string(),
-        },
-    };
-
-    let response = client
-        .post(EVENTSUB_API_URL)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Client-Id", client_id)
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        info!("subscribed to channel.chat.message");
-        Ok(())
-    } else {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(anyhow::anyhow!(
-            "Failed to subscribe to chat: {} - {}",
-            status,
-            body
-        ))
-    }
-}
-
-async fn run_eventsub_loop(
-    mut ws: WsStream,
-    event_tx: mpsc::Sender<TwitchEvent>,
-    cancel_token: CancellationToken,
-    keepalive_timeout: Duration,
-) -> Result<()> {
+async fn read_until_reconnect(
+    ws: &mut WsStream,
+    event_tx: &mpsc::Sender<TwitchEvent>,
+    keepalive: Duration,
+) -> Result<String> {
     loop {
-        tokio::select! {
-            biased;
+        let msg = timeout(keepalive, ws.next())
+            .await
+            .map_err(|_| anyhow!("keepalive timeout"))?
+            .ok_or_else(|| anyhow!("EventSub WebSocket closed"))?
+            .context("EventSub WebSocket error")?;
 
-            _ = cancel_token.cancelled() => {
-                info!("EventSub loop cancelled");
-                let _ = ws.close(None).await;
-                return Ok(());
-            }
-
-            result = tokio::time::timeout(keepalive_timeout, ws.next()) => {
-                match result {
-                    Ok(Some(Ok(msg))) => {
-                        handle_eventsub_message(msg, &event_tx).await?;
-                    }
-                    Ok(Some(Err(e))) => {
-                        return Err(anyhow::anyhow!("WebSocket error: {}", e));
-                    }
-                    Ok(None) => {
-                        info!("EventSub WebSocket closed");
-                        return Ok(());
-                    }
-                    Err(_) => {
-                        warn!("EventSub keepalive timeout, reconnecting...");
-                        return Err(anyhow::anyhow!("keepalive timeout"));
-                    }
-                }
-            }
+        if let Control::Reconnect(url) = handle_eventsub_message(msg, event_tx).await? {
+            return Ok(url);
         }
     }
 }
 
-async fn handle_eventsub_message(msg: Message, event_tx: &mpsc::Sender<TwitchEvent>) -> Result<()> {
+async fn handle_eventsub_message(
+    msg: Message,
+    event_tx: &mpsc::Sender<TwitchEvent>,
+) -> Result<Control> {
     let text = match msg {
         Message::Text(t) => t,
-        Message::Close(_) => {
-            info!("EventSub sent close frame");
-            return Err(anyhow::anyhow!("connection closed"));
-        }
-        Message::Ping(_data) => {
-            debug!("EventSub PING received");
-            return Ok(());
-        }
-        _ => return Ok(()),
+        Message::Close(_) => bail!("EventSub sent close frame"),
+        _ => return Ok(Control::Continue),
     };
 
-    let parsed: EventSubMessage =
-        serde_json::from_str(&text).context("Failed to parse EventSub message")?;
+    let parsed: EventSubMessage = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("skipping malformed EventSub message: {e} - {text}");
+            return Ok(Control::Continue);
+        }
+    };
 
     match parsed.metadata.message_type.as_str() {
-        "session_keepalive" => {
-            debug!("EventSub keepalive");
-        }
-        "notification" => {
-            handle_notification(&parsed, event_tx).await?;
-        }
+        "session_keepalive" => debug!("EventSub keepalive"),
+        "notification" => forward_notification(&parsed, event_tx).await?,
         "session_reconnect" => {
+            let payload: SessionPayload = serde_json::from_value(parsed.payload)
+                .context("Failed to parse session_reconnect payload")?;
+            let url = payload
+                .session
+                .reconnect_url
+                .context("session_reconnect without reconnect_url")?;
+
             warn!("EventSub requested reconnect");
-            return Err(anyhow::anyhow!("reconnect requested"));
+            return Ok(Control::Reconnect(url));
         }
-        "revocation" => {
-            warn!("EventSub subscription revoked");
-        }
-        other => {
-            debug!("Unknown EventSub message type: {}", other);
-        }
+        "revocation" => warn!("EventSub subscription revoked"),
+        other => debug!("Unknown EventSub message type: {other}"),
     }
 
-    Ok(())
+    Ok(Control::Continue)
+}
+
+async fn forward_notification(
+    msg: &EventSubMessage,
+    event_tx: &mpsc::Sender<TwitchEvent>,
+) -> Result<()> {
+    let event = match parse_notification(msg) {
+        Ok(Some(event)) => event,
+        Ok(None) => return Ok(()),
+        Err(e) => {
+            warn!("skipping malformed EventSub notification: {e:?}");
+            return Ok(());
+        }
+    };
+
+    event_tx
+        .send(event)
+        .await
+        .map_err(|_| anyhow!("event receiver dropped"))
+}
+
+fn parse_notification(msg: &EventSubMessage) -> Result<Option<TwitchEvent>> {
+    let event = match msg.metadata.subscription_type.as_deref().unwrap_or("") {
+        REWARD_REDEMPTION_SUBSCRIPTION => map_reward_redemption(parse_event(msg)?),
+        CHAT_MESSAGE_SUBSCRIPTION => map_chat_message(parse_event(msg)?),
+        other => {
+            debug!("Unhandled notification type: {other}");
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(event))
+}
+
+fn parse_event<T: DeserializeOwned>(msg: &EventSubMessage) -> Result<T> {
+    let payload: NotificationPayload = serde_json::from_value(msg.payload.clone())?;
+    Ok(serde_json::from_value(payload.event)?)
+}
+
+fn map_reward_redemption(redemption: RewardRedemptionEvent) -> TwitchEvent {
+    TwitchEvent::RewardRedemption {
+        user: TwitchUser {
+            id: redemption.user_id,
+            display_name: redemption.user_name,
+            role: TwitchRole::empty(),
+        },
+        reward_id: redemption.reward.id,
+        reward_title: redemption.reward.title,
+        cost: redemption.reward.cost,
+        user_input: redemption.user_input,
+    }
+}
+
+fn map_chat_message(chat_msg: ChatMessageEvent) -> TwitchEvent {
+    TwitchEvent::ChatMessage {
+        user: TwitchUser {
+            id: chat_msg.chatter_user_id,
+            display_name: chat_msg.chatter_user_name,
+            role: determine_role_from_badges(&chat_msg.badges),
+        },
+        target: TwitchChatTarget {
+            broadcaster_id: Some(chat_msg.broadcaster_user_id),
+            channel_login: Some(chat_msg.broadcaster_user_login),
+        },
+        text: chat_msg.message.text,
+    }
 }
 
 fn determine_role_from_badges(badges: &[ChatBadge]) -> TwitchRole {
@@ -417,64 +410,6 @@ fn determine_role_from_badges(badges: &[ChatBadge]) -> TwitchRole {
         }
     }
     role
-}
-
-async fn handle_notification(
-    msg: &EventSubMessage,
-    event_tx: &mpsc::Sender<TwitchEvent>,
-) -> Result<()> {
-    let sub_type = msg.metadata.subscription_type.as_deref().unwrap_or("");
-
-    match sub_type {
-        "channel.channel_points_custom_reward_redemption.add" => {
-            let payload: NotificationPayload = serde_json::from_value(msg.payload.clone())?;
-            let redemption: RewardRedemptionEvent = serde_json::from_value(payload.event)?;
-
-            let event = TwitchEvent::RewardRedemption {
-                user: TwitchUser {
-                    id: redemption.user_id,
-                    display_name: redemption.user_name,
-                    role: TwitchRole::empty(),
-                },
-                reward_id: redemption.reward.id,
-                reward_title: redemption.reward.title,
-                cost: redemption.reward.cost,
-                user_input: redemption.user_input,
-            };
-
-            if event_tx.send(event).await.is_err() {
-                return Err(anyhow::anyhow!("event receiver dropped"));
-            }
-        }
-        "channel.chat.message" => {
-            let payload: NotificationPayload = serde_json::from_value(msg.payload.clone())?;
-            let chat_msg: ChatMessageEvent = serde_json::from_value(payload.event)?;
-
-            let role = determine_role_from_badges(&chat_msg.badges);
-
-            let event = TwitchEvent::ChatMessage {
-                user: TwitchUser {
-                    id: chat_msg.chatter_user_id,
-                    display_name: chat_msg.chatter_user_name,
-                    role,
-                },
-                target: TwitchChatTarget {
-                    broadcaster_id: Some(chat_msg.broadcaster_user_id),
-                    channel_login: Some(chat_msg.broadcaster_user_login),
-                },
-                text: chat_msg.message.text,
-            };
-
-            if event_tx.send(event).await.is_err() {
-                return Err(anyhow::anyhow!("event receiver dropped"));
-            }
-        }
-        other => {
-            debug!("Unhandled notification type: {}", other);
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

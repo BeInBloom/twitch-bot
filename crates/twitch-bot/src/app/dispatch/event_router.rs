@@ -5,9 +5,7 @@ use async_trait::async_trait;
 
 use crate::{
     app::dispatch::{
-        projector::{project_chat, project_reward, project_system},
         request::{ChatRequest, RewardRequest, SystemRequest},
-        route::Route,
         traits::{Handler, Interceptor, apply_interceptors},
     },
     model::Event,
@@ -80,12 +78,12 @@ impl EventRouterBuilder {
 #[async_trait]
 impl Handler<Event> for EventRouter {
     async fn handle(&self, event: Event) -> anyhow::Result<()> {
-        let route = Route::from(&event);
-
-        match route {
-            Route::Chat => self.chat_handler.handle(project_chat(event)?).await,
-            Route::Reward => self.reward_handler.handle(project_reward(event)?).await,
-            Route::System => self.system_handler.handle(project_system(event)?).await,
+        match event {
+            Event::ChatMessage(message) => self.chat_handler.handle(message.into()).await,
+            Event::RewardRedemption(redemption) => {
+                self.reward_handler.handle(redemption.into()).await
+            }
+            Event::System(event) => self.system_handler.handle(event.into()).await,
         }
     }
 }

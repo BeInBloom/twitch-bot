@@ -5,7 +5,6 @@ use async_trait::async_trait;
 
 use crate::app::dispatch::{
     request::{ChatRequest, CommandRequest, PlainMessageRequest},
-    route::ChatRoute,
     traits::{Handler, Interceptor, apply_interceptors},
 };
 
@@ -67,18 +66,9 @@ impl ChatRouterBuilder {
 #[async_trait]
 impl Handler<ChatRequest> for ChatRouter {
     async fn handle(&self, request: ChatRequest) -> anyhow::Result<()> {
-        let route = ChatRoute::from(&request);
-
-        match route {
-            ChatRoute::PlainMessage => {
-                self.plain_message_handler
-                    .handle(PlainMessageRequest::try_from(request)?)
-                    .await
-            }
-            ChatRoute::Command => self
-                .command_handler
-                .handle(CommandRequest::try_from(request)?)
-                .await,
+        match request {
+            ChatRequest::Plain(request) => self.plain_message_handler.handle(request).await,
+            ChatRequest::Command(request) => self.command_handler.handle(request).await,
         }
     }
 }

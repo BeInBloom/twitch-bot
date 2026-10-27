@@ -1,7 +1,7 @@
 [package]
 name = "twitch-sdk"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [features]
 default = []
@@ -19,7 +19,6 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-arc-swap = "1.8.2"
 
 [dev-dependencies]
 twitch-sdk = { path = ".", features = ["test-support"] }

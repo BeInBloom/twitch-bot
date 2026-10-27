@@ -64,11 +64,8 @@ impl Drop for TwitchEventSubSource {
 
 #[async_trait]
 impl EventSource for TwitchEventSubSource {
-    async fn fetch(&self) -> mpsc::Receiver<Event> {
-        let mut sdk_rx = {
-            let mut guard = self.client.lock().await;
-            guard.connect().await.expect("SDK connect failed")
-        };
+    async fn fetch(&self) -> Result<mpsc::Receiver<Event>> {
+        let mut sdk_rx = self.client.lock().await.connect().await?;
         let (tx, rx) = mpsc::channel(BUFFER_SIZE);
 
         let cancellation_token = self.cancel_token.clone();
@@ -102,6 +99,6 @@ impl EventSource for TwitchEventSubSource {
             }
         });
 
-        rx
+        Ok(rx)
     }
 }

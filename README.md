@@ -32,7 +32,7 @@ What the bot actually does today:
 
 Command behavior:
 
-- `!music` calls `playerctl metadata` and sends `сейчас играет трек <artist> - <title>` to chat
+- `!music` calls `playerctl metadata` and sends `сейчас играет трек <artist> - <title>` to chat, or `сейчас ничего не играет` when no player is running
 - `!skip` calls `playerctl next` and sends `переключил трек` to chat
 
 ## Workspace layout
@@ -70,18 +70,19 @@ High-level flow:
 
 ```text
 main
+  -> LogGuard::init
   -> bootstrap::run
-  -> ConfigLoader::load
-  -> TokenManager background refresh loop
+  -> ConfigFile::load
+  -> TokenManager background refresh loop (rotated refresh token is written back to config.yaml)
   -> adapters + routers + handlers wiring
   -> Supervisor::run
   -> EventSource::fetch
   -> Consumer<Event>::consume
   -> EventRouter<Event>
-       -> project_chat -> ChatRouter<ChatRequest>
+       -> ChatRequest -> ChatRouter<ChatRequest>
             -> CommandRouter<CommandRequest>
-       -> project_reward -> RewardRouter<RewardRequest>
-       -> project_system -> SystemHandler
+       -> RewardRequest -> RewardRouter<RewardRequest>
+       -> SystemRequest -> SystemHandler
 ```
 
 The staged dispatch tree is documented visually in:
@@ -95,10 +96,13 @@ The staged dispatch tree is documented visually in:
 The runtime behavior currently implemented in code:
 
 - `Consumer` processes up to `30` events concurrently
-- each event handler execution has a `1s` timeout
-- graceful shutdown waits up to `10s`
+- each event handler execution has a `10s` timeout
+- graceful shutdown waits up to `15s`
 - shutdown is triggered by `SIGINT`, `SIGTERM`, or `SIGHUP`
-- logging is initialized through `tracing`
+- logging is initialized through `tracing` before anything else; default filter is `twitch_bot=debug,twitch_sdk=info` and can be overridden with `RUST_LOG`
+- EventSub and IRC reconnect after `5s` on any disconnect; EventSub follows `session_reconnect` to the provided `reconnect_url` without re-subscribing
+- malformed EventSub messages are logged and skipped instead of dropping the connection
+- chat sends check the HTTP status and Helix `is_sent`; on `401` the cached token is invalidated and the send is retried once
 
 ### Routers and typed requests
 
@@ -111,15 +115,14 @@ The dispatch layer uses typed requests per stage:
 
 The design split is:
 
-- `Router` chooses a branch
-- `Projector` converts a broad input into a narrower request
+- `Router` chooses a branch and converts a broad input into a narrower request via `From`
 - `Handler` performs business behavior
 - `Interceptor` wraps a handler before and/or after execution
 
 In the current codebase:
 
-- `app/dispatch/projector.rs` handles `Event -> ChatRequest | RewardRequest | SystemRequest`
-- chat-stage narrowing is completed through `TryFrom<ChatRequest>` into `PlainMessageRequest` or `CommandRequest`
+- `EventRouter` matches on `Event` and converts each variant into `ChatRequest | RewardRequest | SystemRequest`
+- `ChatRouter` matches on `ChatRequest::Plain | ChatRequest::Command`
 - interceptors are supported by the builders, but no concrete interceptors are wired in `bootstrap` yet
 
 ### Dynamic route registration
@@ -172,55 +175,18 @@ The bot expects `./config.yaml`.
 Example:
 
 ```yaml
-environment:
-  env: "development"
-
 twitch:
   auth:
     broadcaster_id: "..."
     client_id: "..."
     client_secret: "..."
-    access_token: "..."
     refresh_token: "..."
-    writer_id: "..."
-  bot:
-    nick: "..."
-    channels:
-      - "channel1"
-      - "channel2"
-    broadcaster_id: "..."
     writer_id: "..."
 ```
 
-### What is actually used today
+Every field is a non-empty string validated by `#[derive(WrapperType)]` wrappers. Secret fields (`client_secret`, `refresh_token`) use `#[derive(SecretDebug)]`, so they are printed as `***` in `Debug` output.
 
-The current bootstrap path actively uses:
-
-- `twitch.auth.client_id`
-- `twitch.auth.client_secret`
-- `twitch.auth.refresh_token`
-- `twitch.auth.broadcaster_id`
-- `twitch.auth.writer_id`
-
-Important nuance:
-
-- `access_token` exists in the config model, but the current runtime path initializes `TokenManager` from `refresh_token` and refreshes tokens on startup/background loop
-- `twitch.bot.*` is currently deserialized, but not used by `bootstrap.rs`
-
-So the schema is a bit ahead of the wiring.
-
-### Validation
-
-Config types use `#[derive(WrapperType)]` wrappers, which gives:
-
-- strongly typed config fields
-- string-level validation from the wrapper type
-- YAML deserialization into typed wrappers
-
-Current limitation:
-
-- `config::validate::validate` is still a pass-through function
-- so cross-field validation and collection-level validation are not implemented yet
+When Twitch rotates the refresh token, the bot writes the new value back into `config.yaml` atomically and keeps the file permissions. The file is re-serialized by `serde_yaml`, so comments and formatting in it are lost.
 
 ## Running
 
@@ -287,8 +253,7 @@ These limitations are real in the current code:
 
 - no concrete interceptors are wired yet
 - reward routing only has a fallback handler in `bootstrap`
-- `twitch.bot.*` config is not connected to runtime behavior
-- config validation beyond wrapper-type checks is not implemented
+- commands have no role checks or cooldowns yet
 - the app is Unix-oriented because it depends on `tokio::signal::unix` and `playerctl`
 - unsupported Twitch events are collapsed into `System` events instead of getting dedicated branches
 

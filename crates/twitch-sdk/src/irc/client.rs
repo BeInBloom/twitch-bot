@@ -13,11 +13,11 @@ use url::Url;
 use super::parser::parse_irc_messages;
 use crate::auth::TokenManager;
 use crate::model::TwitchEvent;
+use crate::reconnect::spawn_reconnecting;
 
 const TWITCH_WS_URL: &str = "wss://irc-ws.chat.twitch.tv:443";
 const CHANNEL_BUFFER_SIZE: usize = 100;
 const WS_CMD_BUFFER_SIZE: usize = 32;
-const RECONNECT_DELAY_SECS: u64 = 5;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
@@ -71,51 +71,30 @@ impl IrcClient {
     }
 
     pub async fn connect(&mut self) -> Result<mpsc::Receiver<TwitchEvent>> {
-        let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        anyhow::ensure!(self.handle.is_none(), "IRC client is already connected");
 
-        let tm = self.token_manager.clone();
-        let nick = self.nick.clone();
-        let channel = self.channel.clone();
-        let cancel = self.cancel_token.clone();
-        let url = self
-            .custom_url
-            .clone()
-            .unwrap_or_else(|| TWITCH_WS_URL.to_string());
+        let (event_tx, event_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let session = Arc::new(IrcSession {
+            token_manager: self.token_manager.clone(),
+            nick: self.nick.clone(),
+            channel: self.channel.clone(),
+            url: self
+                .custom_url
+                .clone()
+                .unwrap_or_else(|| TWITCH_WS_URL.to_string()),
+        });
 
-        self.handle = Some(tokio::spawn(async move {
-            info!("starting IRC client lifecycle...");
+        self.handle = Some(spawn_reconnecting(
+            "IRC",
+            self.cancel_token.clone(),
+            move || {
+                let session = session.clone();
+                let event_tx = event_tx.clone();
+                async move { run_lifecycle(&session, event_tx).await }
+            },
+        ));
 
-            loop {
-                tokio::select! {
-                    biased;
-
-                    _ = cancel.cancelled() => {
-                        info!("IRC client cancelled, shutting down");
-                        break;
-                    }
-
-                    result = run_lifecycle(
-                        tx.clone(),
-                        tm.clone(),
-                        nick.clone(),
-                        channel.clone(),
-                        cancel.clone(),
-                        url.clone(),
-                    ) => {
-                        if let Err(e) = result {
-                            if cancel.is_cancelled() {
-                                info!("IRC client shutdown complete");
-                                break;
-                            }
-                            error!("twitch connection lost: {:?}. reconnecting in {}s...", e, RECONNECT_DELAY_SECS);
-                            tokio::time::sleep(tokio::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
-                        }
-                    }
-                }
-            }
-        }));
-
-        Ok(rx)
+        Ok(event_rx)
     }
 
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
@@ -127,28 +106,30 @@ impl IrcClient {
     }
 }
 
-async fn run_lifecycle(
-    event_tx: mpsc::Sender<TwitchEvent>,
+struct IrcSession {
     token_manager: Arc<TokenManager>,
     nick: String,
     channel: String,
-    cancel_token: CancellationToken,
-    ws_url: String,
-) -> Result<()> {
-    let token = token_manager.get_token().await.context("auth failed")?;
+    url: String,
+}
 
-    let ws_stream = connect_to_url(&ws_url).await?;
+async fn run_lifecycle(session: &IrcSession, event_tx: mpsc::Sender<TwitchEvent>) -> Result<()> {
+    let token = session
+        .token_manager
+        .get_token()
+        .await
+        .context("auth failed")?;
+
+    let ws_stream = connect_to_url(&session.url).await?;
     let (write_sink, read_stream) = ws_stream.split();
     let (cmd_tx, cmd_rx) = mpsc::channel::<String>(WS_CMD_BUFFER_SIZE);
 
     let (writer_error_tx, writer_error_rx) = tokio::sync::oneshot::channel::<()>();
 
     spawn_writer_actor(write_sink, cmd_rx, writer_error_tx);
-    perform_handshake(&cmd_tx, &token, &nick, &channel).await?;
+    perform_handshake(&cmd_tx, &token, &session.nick, &session.channel).await?;
 
-    run_reader_loop(read_stream, event_tx, cmd_tx, cancel_token, writer_error_rx).await?;
-
-    Ok(())
+    run_reader_loop(read_stream, event_tx, cmd_tx, writer_error_rx).await
 }
 
 async fn connect_to_url(ws_url: &str) -> Result<WsStream> {
@@ -197,17 +178,11 @@ async fn run_reader_loop(
     mut stream: WsReader,
     event_tx: mpsc::Sender<TwitchEvent>,
     cmd_tx: mpsc::Sender<String>,
-    cancel_token: CancellationToken,
     mut writer_error_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
     loop {
         tokio::select! {
             biased;
-
-            _ = cancel_token.cancelled() => {
-                info!("reader loop cancelled");
-                return Ok(());
-            }
 
             _ = &mut writer_error_rx => {
                 warn!("writer actor failed, restarting connection");

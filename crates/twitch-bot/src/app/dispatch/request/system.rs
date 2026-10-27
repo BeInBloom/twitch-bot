@@ -1,19 +1,12 @@
-use anyhow::{Result, bail};
-
-use crate::model::{Event, SystemEvent};
+use crate::model::SystemEvent;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SystemRequest {
     pub event: SystemEvent,
 }
 
-impl TryFrom<Event> for SystemRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(event: Event) -> Result<Self> {
-        match event {
-            Event::System(event) => Ok(Self { event }),
-            other => bail!("expected system event, got {other:?}"),
-        }
+impl From<SystemEvent> for SystemRequest {
+    fn from(event: SystemEvent) -> Self {
+        Self { event }
     }
 }
